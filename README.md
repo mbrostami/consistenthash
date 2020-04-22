@@ -20,9 +20,9 @@ import (
 
 // Create CH with 2 replicas
 ch := chash.NewConsistentHash(2, nil)
-ch.Add("127.0.0.1:1000") // node 1
-ch.Add("127.0.0.1:1001") // node 2
-ch.Add("127.0.0.1:1002") // node 3
+ch.Add("127.0.0.1:1001") // node 1
+ch.Add("127.0.0.1:1002") // node 2
+ch.AddReplicas("127.0.0.1:1003", 4) // node3 has more capacity so possibility to get assign request to node3 is higher than others 
 
 node := ch.Get("something to find the a server for that") // find upper closest node
 fmt.println(node) // this will print out one of the nodes  

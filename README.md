@@ -1,15 +1,17 @@
-# Consistent Hash
-A Go library that implements Consistent Hashing
+# Consistent Hashing
+A Go library that implements Consistent Hashing  
+This package is implemented based on  [golang/groupcache](https://github.com/golang/groupcache) package with some improvements
 
 Definitions in this README:  
-`node`: Refers to key which is going to be stored in hash ring or hash table    
-`rkey`: Refers to the request hash which is not going to be stored, it used to find the upper closest node in hash ring to the rkey  
+`node`: Refers to the key which is going to be stored in the hash ring or hash table    
+`rKey`: Refers to the request hash which is not going to be stored, it's used to find the upper closest node in the hash ring to the rKey  
    
-This package is implemented based on  github.com/golang/groupcache/consistenthash package but with some changes:  
-- `Remove` function added - O(n) to sort and remove node from hash ring   
+
+### Improvements:  
+- `Remove` function added - sort and remove a node from the hash ring   
 - int hashes replaced with uint32  
 - Number of replicas is now configurable while adding new node   
-**Note**: This is useful when capacity is not the same in all nodes  
+**Note**: This is useful when capacity is not the same for all nodes  
 
 # Usage
 
@@ -18,13 +20,14 @@ import (
     chash "github.com/mbrostami/consistenthash"
 )
 
-// Create CH with 2 replicas
+// Create ConsistentHash with 2 replicas
 ch := chash.NewConsistentHash(2, nil)
 ch.Add("127.0.0.1:1001") // node 1
 ch.Add("127.0.0.1:1002") // node 2
-ch.AddReplicas("127.0.0.1:1003", 4) // node3 has more capacity so possibility to get assign request to node3 is higher than others 
+ch.AddReplicas("127.0.0.1:1003", 4) // node3 has more capacity so possibility to get assigned request is higher than other nodes 
 
-node := ch.Get("something to find the a server for that") // find upper closest node
+rKey := "something like request url"
+node := ch.Get(rKey) // find upper closest node
 fmt.println(node) // this will print out one of the nodes  
 ```
 

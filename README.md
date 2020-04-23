@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.com/mbrostami/consistenthash.svg?branch=master)](https://travis-ci.com/mbrostami/consistenthash)
+[![Go Report Card](https://goreportcard.com/badge/github.com/mbrostami/consistenthash)](https://goreportcard.com/report/github.com/mbrostami/consistenthash)
+
 # Consistent Hashing
 A Go library that implements Consistent Hashing  
 This package is implemented based on  [golang/groupcache](https://github.com/golang/groupcache) package with some improvements

@@ -39,5 +39,9 @@ fmt.println(node) // this will print out one of the nodes
 Benchmark  
 `go test -bench=.`   
 
+Race Condition 
+`go test --race`  
+Thanks to **Mohammad Rajabloo** for reporting the race issue 
+
 Tests  
 `go test`    

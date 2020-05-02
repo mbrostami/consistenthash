@@ -107,6 +107,16 @@ func TestReplication(t *testing.T) {
 	}
 }
 
+func TestConcurrency(t *testing.T) {
+	hash := NewConsistentHash(1, nil)
+	items := []string{"Bill", "Bob", "Bonny", "Bob", "Bill", "Bony", "Bob"}
+	for _, item := range items {
+		go func(it string) {
+			hash.Add(it)
+		}(item)
+	}
+}
+
 func TestConsistency(t *testing.T) {
 	hash1 := NewConsistentHash(1, nil)
 	hash2 := NewConsistentHash(1, nil)

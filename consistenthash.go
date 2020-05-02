@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"sort"
 	"strconv"
+	"sync"
 )
 
 // HashFunc hash function to generate random hash
@@ -12,6 +13,7 @@ type HashFunc func(data []byte) uint32
 
 // ConsistentHash everything we need for CH
 type ConsistentHash struct {
+	sync.RWMutex
 	hash            HashFunc
 	defaultReplicas int               // default number of replicas in hash ring (higher number means more posibility for balance equality)
 	hKeys           []uint32          // Sorted
@@ -59,6 +61,8 @@ func (ch *ConsistentHash) Get(key string) string {
 	if ch.IsEmpty() {
 		return ""
 	}
+	ch.RLock()
+	defer ch.RUnlock()
 	hash := ch.hash([]byte(key))
 
 	// Binary search for appropriate replica
@@ -77,6 +81,8 @@ func (ch *ConsistentHash) Remove(key string) bool {
 		return true
 	}
 	replicas := ch.rTable[key]
+	ch.Lock()
+	defer ch.Unlock()
 	for i := 0; i < replicas; i++ {
 		hash := ch.hash([]byte(strconv.Itoa(i) + key))
 		delete(ch.hTable, hash) // delete replica
@@ -98,6 +104,8 @@ func (ch *ConsistentHash) removeHashKey(hash uint32) {
 
 // add inserts new hash in hash table
 func (ch *ConsistentHash) add(key string, replicas int) {
+	ch.Lock()
+	defer ch.Unlock()
 	for i := 0; i < replicas; i++ {
 		hash := ch.hash([]byte(strconv.Itoa(i) + key))
 		ch.hKeys = append(ch.hKeys, hash)

@@ -14,20 +14,20 @@ type HashFunc func(data []byte) uint32
 // ConsistentHash everything we need for CH
 type ConsistentHash struct {
 	sync.RWMutex
-	hash            HashFunc
-	defaultReplicas int               // default number of replicas in hash ring (higher number means more posibility for balance equality)
-	hKeys           []uint32          // Sorted
-	hTable          map[uint32]string // Hash table unsorted key value pair (hash(x): x) of replicas (nodes)
-	rTable          map[string]int    // Number of replicas per stored key
+	hash     HashFunc
+	replicas int               // default number of replicas in hash ring (higher number means more posibility for balance equality)
+	hKeys    []uint32          // Sorted
+	hTable   map[uint32]string // Hash table unsorted key value pair (hash(x): x) of replicas (nodes)
+	rTable   map[string]int    // Number of replicas per stored key
 }
 
-// NewConsistentHash makes new ConsistentHash
-func NewConsistentHash(defaultReplicas int, hashFunction HashFunc) *ConsistentHash {
+// New makes new ConsistentHash
+func New(replicas int, hashFunction HashFunc) *ConsistentHash {
 	ch := &ConsistentHash{
-		defaultReplicas: defaultReplicas,
-		hash:            hashFunction,
-		hTable:          make(map[uint32]string),
-		rTable:          make(map[string]int),
+		replicas: replicas,
+		hash:     hashFunction,
+		hTable:   make(map[uint32]string),
+		rTable:   make(map[string]int),
 	}
 	if ch.hash == nil {
 		ch.hash = crc32.ChecksumIEEE
@@ -43,14 +43,14 @@ func (ch *ConsistentHash) IsEmpty() bool {
 // Add adds some keys to the hash
 // key can be also ip:port of a replica
 func (ch *ConsistentHash) Add(key string) {
-	ch.add(key, ch.defaultReplicas)
+	ch.add(key, ch.replicas)
 }
 
 // AddReplicas adds key and generates "replicas" number of hashes in ring
 // key can be also ip:port of a replica
 func (ch *ConsistentHash) AddReplicas(key string, replicas int) {
 	if replicas < 1 {
-		replicas = ch.defaultReplicas
+		replicas = ch.replicas
 	}
 	ch.add(key, replicas)
 }

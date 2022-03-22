@@ -10,7 +10,7 @@ func TestHashing(t *testing.T) {
 
 	// Override the hash function to return easier to reason about values. Assumes
 	// the keys can be converted to an integer.
-	hash := NewConsistentHash(3, func(key []byte) uint32 {
+	hash := New(3, func(key []byte) uint32 {
 		i, err := strconv.Atoi(string(key))
 		if err != nil {
 			panic(err)
@@ -64,7 +64,7 @@ func TestHashing(t *testing.T) {
 func TestReplication(t *testing.T) {
 
 	// Default replica is 1
-	hash := NewConsistentHash(1, func(key []byte) uint32 {
+	hash := New(1, func(key []byte) uint32 {
 		i, err := strconv.Atoi(string(key))
 		if err != nil {
 			panic(err)
@@ -108,7 +108,7 @@ func TestReplication(t *testing.T) {
 }
 
 func TestConcurrency(t *testing.T) {
-	hash := NewConsistentHash(1, nil)
+	hash := New(1, nil)
 	items := []string{"Bill", "Bob", "Bonny", "Bob", "Bill", "Bony", "Bob"}
 	for _, item := range items {
 		go func(it string) {
@@ -118,8 +118,8 @@ func TestConcurrency(t *testing.T) {
 }
 
 func TestConsistency(t *testing.T) {
-	hash1 := NewConsistentHash(1, nil)
-	hash2 := NewConsistentHash(1, nil)
+	hash1 := New(1, nil)
+	hash2 := New(1, nil)
 
 	hash1.Add("Bill")
 	hash1.Add("Bob")
@@ -151,7 +151,7 @@ func BenchmarkGet512(b *testing.B) { benchmarkGet(b, 512) }
 
 func benchmarkGet(b *testing.B, shards int) {
 
-	hash := NewConsistentHash(50, nil)
+	hash := New(50, nil)
 
 	var buckets []string
 	for i := 0; i < shards; i++ {

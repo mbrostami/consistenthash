@@ -17,6 +17,8 @@ Definitions in this README:
 **Note**: This is useful when capacity is not the same for all nodes  
 
 # Usage
+`go get github.com/mbrostami/consistenthash`  
+
 
 ```
 import (

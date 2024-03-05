@@ -2,6 +2,7 @@
 package consistenthash
 
 import (
+	"bytes"
 	"hash/crc32"
 	"sort"
 	"strconv"
@@ -15,20 +16,29 @@ type HashFunc func(data []byte) uint32
 type ConsistentHash struct {
 	mu       sync.RWMutex
 	hash     HashFunc
-	replicas int               // default number of replicas in hash ring (higher number means more posibility for balance equality)
+	replicas uint              // default number of replicas in hash ring (higher number means more possibility for balance equality)
 	hKeys    []uint32          // Sorted
-	hTable   map[uint32]string // Hash table unsorted key value pair (hash(x): x) of replicas (nodes)
-	rTable   map[string]int    // Number of replicas per stored key
+	hTable   map[uint32][]byte // Hash table key value pair (hash(x): x) * replicas (nodes)
+	rTable   map[uint32]uint   // Number of replicas per stored key
 }
 
 // New makes new ConsistentHash
-func New(replicas int, hashFunction HashFunc) *ConsistentHash {
-	ch := &ConsistentHash{
-		replicas: replicas,
-		hash:     hashFunction,
-		hTable:   make(map[uint32]string),
-		rTable:   make(map[string]int),
+func New(opts ...Option) *ConsistentHash {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
 	}
+	ch := &ConsistentHash{
+		replicas: o.defaultReplicas,
+		hash:     o.hashFunc,
+		hTable:   make(map[uint32][]byte, 0),
+		rTable:   make(map[uint32]uint, 0),
+	}
+
+	if ch.replicas < 1 {
+		ch.replicas = 1
+	}
+
 	if ch.hash == nil {
 		ch.hash = crc32.ChecksumIEEE
 	}
@@ -41,39 +51,57 @@ func (ch *ConsistentHash) IsEmpty() bool {
 }
 
 // Add adds some keys to the hash
-// key can be also ip:port of a replica
-func (ch *ConsistentHash) Add(key string) {
-	ch.add(key, ch.replicas)
+func (ch *ConsistentHash) Add(keys ...string) {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	ch.add(ch.replicas, keys...)
 }
 
 // AddReplicas adds key and generates "replicas" number of hashes in ring
-// key can be also ip:port of a replica
-func (ch *ConsistentHash) AddReplicas(key string, replicas int) {
+func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...string) {
 	if replicas < 1 {
-		// TODO this is a bug, but changing it is a breaking change, so in v2 will be fixed
-		replicas = ch.replicas
+		return
 	}
-	ch.add(key, replicas)
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	ch.add(replicas, keys...)
 }
 
-// Get gets the closest item in the hash ring to the provided key
-// e.g. key = "request url" O(log n)
-func (ch *ConsistentHash) Get(key string) string {
+// GetBytes gets the closest item in the hash ring to the provided key as []byte
+func (ch *ConsistentHash) GetBytes(key []byte) []byte {
 	if ch.IsEmpty() {
-		return ""
+		return nil
 	}
 	ch.mu.RLock()
 	defer ch.mu.RUnlock()
-	hash := ch.hash([]byte(key))
+	hash := ch.hash(key)
 
-	// Binary search for appropriate replica
+	// check if the exact match exist in the hash table
+	if v, ok := ch.hTable[hash]; ok {
+		return v
+	}
+
+	// binary search for appropriate replica
 	idx := sort.Search(len(ch.hKeys), func(i int) bool { return ch.hKeys[i] >= hash })
 
-	// Means we have cycled back to the first replica
+	// means we have cycled back to the first replica
 	if idx == len(ch.hKeys) {
 		idx = 0
 	}
-	return ch.hTable[ch.hKeys[idx]]
+
+	if v, ok := ch.hTable[ch.hKeys[idx]]; ok {
+		return v
+	}
+
+	return nil
+}
+
+// Get gets the closest item in the hash ring to the provided key
+func (ch *ConsistentHash) Get(key string) string {
+	if v := ch.GetBytes([]byte(key)); v != nil {
+		return string(v)
+	}
+	return ""
 }
 
 // Remove removes the key from hash table
@@ -83,37 +111,77 @@ func (ch *ConsistentHash) Remove(key string) bool {
 	}
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
-	replicas := ch.rTable[key]
-	for i := 0; i < replicas; i++ {
-		hash := ch.hash([]byte(strconv.Itoa(i) + key))
+	originalHash := ch.hash([]byte(key))
+
+	replicas, found := ch.rTable[originalHash]
+	if !found {
+		// if not found, means using the default number
+		replicas = ch.replicas
+	}
+
+	var err error
+	var b bytes.Buffer
+	var hash uint32
+	for i := 0; i < int(replicas); i++ {
+		if _, err = b.WriteString(key); err != nil {
+			return false
+		}
+		if _, err = b.WriteString(strconv.Itoa(i)); err != nil {
+			return false
+		}
+		hash = ch.hash(b.Bytes())
 		delete(ch.hTable, hash) // delete replica
 		ch.removeHashKey(hash)
+		b.Reset()
 	}
-	delete(ch.rTable, key) // delete replica numbers
+
+	if found {
+		delete(ch.rTable, originalHash) // delete replica numbers
+	}
+
 	return true
 }
 
 // removeHashKey remove item from sorted hKeys and keep it sorted O(n)
 func (ch *ConsistentHash) removeHashKey(hash uint32) {
-	for idx := 0; idx < len(ch.hKeys); idx++ {
-		if ch.hKeys[idx] == hash {
-			ch.hKeys = append(ch.hKeys[:idx], ch.hKeys[idx+1:]...)
-			break
+	for i := range ch.hKeys {
+		if ch.hKeys[i] == hash {
+			ch.hKeys = append(ch.hKeys[:i], ch.hKeys[i+1:]...)
+			return
 		}
 	}
 }
 
-// add inserts new hash in hash table
-func (ch *ConsistentHash) add(key string, replicas int) {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-	for i := 0; i < replicas; i++ {
-		hash := ch.hash([]byte(strconv.Itoa(i) + key))
-		ch.hKeys = append(ch.hKeys, hash)
-		ch.hTable[hash] = key
+// add inserts new hashes in hash table
+func (ch *ConsistentHash) add(replicas uint, keys ...string) {
+	// increase the capacity of the slice
+	n := len(keys) * int(replicas)
+	if n -= cap(ch.hKeys) - len(ch.hKeys); n > 0 { // check if we need to grow the slice
+		ch.hKeys = append(ch.hKeys[:len(ch.hKeys):len(ch.hKeys)], make([]uint32, n, n)...)[:len(ch.hKeys)]
 	}
-	ch.rTable[key] = replicas
-	// Sort hKeys to speedup lookup
+
+	var hash uint32
+	for _, key := range keys {
+		var b bytes.Buffer
+		var h bytes.Buffer
+		for i := 0; i < int(replicas); i++ {
+			b.WriteString(key)
+			h.WriteString(key)
+			if i != 0 { // first item is equal to the key itself
+				h.WriteString(strconv.Itoa(i))
+			}
+			hash = ch.hash(h.Bytes())
+			ch.hKeys = append(ch.hKeys, hash)
+			ch.hTable[hash] = b.Bytes()[:b.Len():b.Len()]
+			b.Reset()
+			h.Reset()
+		}
+		// do not store number of replicas if uses default number
+		if replicas != ch.replicas {
+			ch.rTable[ch.hash([]byte(key))] = replicas
+		}
+	}
+	// Sort hKeys
 	sort.Slice(ch.hKeys, func(i, j int) bool {
 		return ch.hKeys[i] < ch.hKeys[j]
 	})

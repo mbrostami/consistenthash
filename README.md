@@ -19,34 +19,44 @@ This package is implemented based on [golang/groupcache](https://github.com/gola
 
 ### Simple use case
 ```go
+package main
+
 import (
-    "fmt"
-	
-    "github.com/mbrostami/consistenthash/v2"
+	"fmt"
+
+	"github.com/mbrostami/consistenthash/v2"
 )
 
-ch := consistenthash.New(WithDefaultReplicas(10))
-ch.Add("templateA", "templateB")
+func main() {
 
-assignedTemplate := ch.Get("userA") // assigned template should always be the same for `userA`
-fmt.Printf("assigned: %s", assignedTemplate)
+	ch := consistenthash.New(WithDefaultReplicas(10))
+	ch.Add("templateA", "templateB")
+
+	assignedTemplate := ch.Get("userA") // assigned template should always be the same for `userA`
+	fmt.Printf("assigned: %s", assignedTemplate)
+}
 ```
 
 ### Weighted load
 
 
 ```go
+package main
+
 import (
-    "fmt"
-    
-    "github.com/mbrostami/consistenthash/v2"
+	"fmt"
+
+	"github.com/mbrostami/consistenthash/v2"
 )
 
-ch := consistenthash.New(WithDefaultReplicas(10))
-ch.Add("127.0.0.1:1001", "127.0.0.1:1002") 
-ch.AddReplicas(40, "127.0.0.1:1003") // 4x more weight 
+func main() {
+	ch := consistenthash.New(consistenthash.WithDefaultReplicas(10))
+	ch.Add("127.0.0.1:1001", "127.0.0.1:1002")
+	ch.AddReplicas(40, "127.0.0.1:1003") // 4x more weight
 
-rKey := "something like request url or user id"
-node := ch.Get(rKey) // find upper closest node
-fmt.Println(node) // this will print out one of the nodes
+	rKey := "something like request url or user id"
+	node := ch.Get(rKey) // find upper closest node
+	fmt.Println(node) // this will print out one of the nodes
+}
+
 ```

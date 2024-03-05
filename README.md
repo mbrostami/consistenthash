@@ -29,7 +29,7 @@ import (
 
 func main() {
 
-	ch := consistenthash.New(WithDefaultReplicas(10))
+	ch := consistenthash.New(consistenthash.WithDefaultReplicas(10))
 	ch.Add("templateA", "templateB")
 
 	assignedTemplate := ch.Get("userA") // assigned template should always be the same for `userA`

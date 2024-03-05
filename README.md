@@ -3,16 +3,13 @@
 
 # Consistent Hashing
 
-A Go library that implements Consistent Hashing
-This package is implemented based on [golang/groupcache](https://github.com/golang/groupcache) package with some improvements
+A Go library that implements Consistent Hashing with zero dependency   
+This package is implemented based on [golang/groupcache](https://github.com/golang/groupcache) with some performance improvements
 
-Definitions in this README:
-`node`: Refers to the key which is going to be stored in the hash ring or hash table
-`rKey`: Refers to the request hash which is not going to be stored, it's used to find the upper closest node in the hash ring to the rKey
 
 ### Improvements:
 
-- `Remove` function added - sort and remove a node from the hash ring
+- `Remove` function added - sort and remove a node (and replicas) from the hash ring
 - int hashes replaced with uint32
 - Number of replicas is now configurable while adding new node (This is useful when capacity is not the same for all nodes)
 

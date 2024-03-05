@@ -27,6 +27,7 @@ import (
 	
     "github.com/mbrostami/consistenthash/v2"
 )
+
 ch := consistenthash.New(WithDefaultReplicas(10))
 ch.Add("templateA", "templateB")
 
@@ -36,10 +37,12 @@ fmt.Printf("assigned: %s", assignedTemplate)
 
 ### Weighted load
 
-    "github.com/mbrostami/consistenthash/v2"
+
 ```go
 import (
     "fmt"
+    
+    "github.com/mbrostami/consistenthash/v2"
 )
 
 ch := consistenthash.New(WithDefaultReplicas(10))

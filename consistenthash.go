@@ -50,6 +50,7 @@ func (ch *ConsistentHash) Add(key string) {
 // key can be also ip:port of a replica
 func (ch *ConsistentHash) AddReplicas(key string, replicas int) {
 	if replicas < 1 {
+		// TODO this is a bug, but changing it is a breaking change, so in v2 will be fixed
 		replicas = ch.replicas
 	}
 	ch.add(key, replicas)
@@ -80,9 +81,9 @@ func (ch *ConsistentHash) Remove(key string) bool {
 	if ch.IsEmpty() {
 		return true
 	}
-	replicas := ch.rTable[key]
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
+	replicas := ch.rTable[key]
 	for i := 0; i < replicas; i++ {
 		hash := ch.hash([]byte(strconv.Itoa(i) + key))
 		delete(ch.hTable, hash) // delete replica

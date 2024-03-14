@@ -1,6 +1,7 @@
 package consistenthash
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"testing"
@@ -142,10 +143,12 @@ func TestConsistency(t *testing.T) {
 
 }
 
-func BenchmarkGet8(b *testing.B)   { benchmarkGet(b, 8) }
-func BenchmarkGet32(b *testing.B)  { benchmarkGet(b, 32) }
-func BenchmarkGet128(b *testing.B) { benchmarkGet(b, 128) }
-func BenchmarkGet512(b *testing.B) { benchmarkGet(b, 512) }
+func BenchmarkGetBytes8(b *testing.B)   { benchmarkGetBytes(b, 8) }
+func BenchmarkGetBytes512(b *testing.B) { benchmarkGetBytes(b, 512) }
+func BenchmarkGet8(b *testing.B)        { benchmarkGet(b, 8) }
+func BenchmarkGet32(b *testing.B)       { benchmarkGet(b, 32) }
+func BenchmarkGet128(b *testing.B)      { benchmarkGet(b, 128) }
+func BenchmarkGet512(b *testing.B)      { benchmarkGet(b, 512) }
 
 func benchmarkGet(b *testing.B, shards int) {
 
@@ -160,5 +163,24 @@ func benchmarkGet(b *testing.B, shards int) {
 
 	for i := 0; i < b.N; i++ {
 		hash.Get(buckets[i&(shards-1)])
+	}
+}
+
+func benchmarkGetBytes(b *testing.B, shards int) {
+
+	hash := New(WithDefaultReplicas(50))
+
+	var buckets [][]byte
+	var str bytes.Buffer
+	for i := 0; i < shards; i++ {
+		str.WriteString(fmt.Sprintf("shard-%d", i))
+		buckets = append(buckets, str.Bytes())
+		hash.Add(str.String())
+		str.Reset()
+	}
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		hash.GetBytes(buckets[i&(shards-1)])
 	}
 }

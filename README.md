@@ -12,6 +12,22 @@ This package is implemented based on [golang/groupcache](https://github.com/gola
 - int hashes replaced with uint32
 - Number of replicas is now configurable while adding new node (This is useful when capacity is not the same for all nodes)
 
+# Benchmark
+```bash
+> go test . -run none -bench Benchmark -benchtime 3s -benchmem
+goos: darwin
+goarch: arm64
+pkg: github.com/mbrostami/consistenthash/v2
+BenchmarkGetBytes8-10           231205284               15.82 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes512-10         238540726               15.19 ns/op            0 B/op          0 allocs/op
+BenchmarkGet8-10                98263779                31.90 ns/op            8 B/op          1 allocs/op
+BenchmarkGet32-10               100000000               32.70 ns/op            8 B/op          1 allocs/op
+BenchmarkGet128-10              100000000               31.15 ns/op            9 B/op          1 allocs/op
+BenchmarkGet512-10              90142914                37.57 ns/op           14 B/op          1 allocs/op
+PASS
+ok      github.com/mbrostami/consistenthash/v2  31.128s
+
+```
 # Usage
 
 `go get github.com/mbrostami/consistenthash/v2`

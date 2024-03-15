@@ -143,44 +143,56 @@ func TestConsistency(t *testing.T) {
 
 }
 
-func BenchmarkGetBytes8(b *testing.B)   { benchmarkGetBytes(b, 8) }
-func BenchmarkGetBytes512(b *testing.B) { benchmarkGetBytes(b, 512) }
-func BenchmarkGet8(b *testing.B)        { benchmarkGet(b, 8) }
-func BenchmarkGet32(b *testing.B)       { benchmarkGet(b, 32) }
-func BenchmarkGet128(b *testing.B)      { benchmarkGet(b, 128) }
-func BenchmarkGet512(b *testing.B)      { benchmarkGet(b, 512) }
+func BenchmarkGetBytes8(b *testing.B)            { benchmarkGetBytes(b, 8, false) }
+func BenchmarkGetBytes512(b *testing.B)          { benchmarkGetBytes(b, 512, false) }
+func BenchmarkGetBytes1024(b *testing.B)         { benchmarkGetBytes(b, 1024, false) }
+func BenchmarkGetBytes4096(b *testing.B)         { benchmarkGetBytes(b, 4096, false) }
+func BenchmarkGetBytesLockFree8(b *testing.B)    { benchmarkGetBytes(b, 8, true) }
+func BenchmarkGetBytesLockFree512(b *testing.B)  { benchmarkGetBytes(b, 512, true) }
+func BenchmarkGetBytesLockFree1024(b *testing.B) { benchmarkGetBytes(b, 1024, true) }
+func BenchmarkGetBytesLockFree4096(b *testing.B) { benchmarkGetBytes(b, 4096, true) }
 
-func benchmarkGet(b *testing.B, shards int) {
+func BenchmarkGet8(b *testing.B)           { benchmarkGet(b, 8, false) }
+func BenchmarkGet512(b *testing.B)         { benchmarkGet(b, 512, false) }
+func BenchmarkGetLockFree8(b *testing.B)   { benchmarkGet(b, 8, true) }
+func BenchmarkGetLockFree512(b *testing.B) { benchmarkGet(b, 512, true) }
 
-	hash := New(WithDefaultReplicas(50))
+func benchmarkGet(b *testing.B, shards int, readLockFree bool) {
+
+	hash := New(WithDefaultReplicas(50), WithReadLockFree(readLockFree))
 
 	var buckets []string
+	var lookups []string
 	for i := 0; i < shards; i++ {
 		buckets = append(buckets, fmt.Sprintf("shard-%d", i))
 		hash.Add(fmt.Sprintf("shard-%d", i))
+		lookups = append(lookups, fmt.Sprintf("shard-x-%d", i))
 	}
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		hash.Get(buckets[i&(shards-1)])
+		hash.Get(lookups[i&(shards-1)])
 	}
 }
 
-func benchmarkGetBytes(b *testing.B, shards int) {
+func benchmarkGetBytes(b *testing.B, shards int, readLockFree bool) {
 
-	hash := New(WithDefaultReplicas(50))
+	hash := New(WithDefaultReplicas(50), WithReadLockFree(readLockFree))
+	b.ResetTimer()
 
-	var buckets [][]byte
+	var buckets []string
+	var lookups [][]byte
 	var str bytes.Buffer
 	for i := 0; i < shards; i++ {
 		str.WriteString(fmt.Sprintf("shard-%d", i))
-		buckets = append(buckets, str.Bytes())
-		hash.Add(str.String())
+		buckets = append(buckets, str.String())
+		str.Reset()
+		str.WriteString(fmt.Sprintf("shard-x-%d", i))
+		lookups = append(lookups, str.Bytes())
 		str.Reset()
 	}
-	b.ResetTimer()
-
+	hash.Add(buckets...)
 	for i := 0; i < b.N; i++ {
-		hash.GetBytes(buckets[i&(shards-1)])
+		hash.GetBytes(lookups[i&(shards-1)])
 	}
 }

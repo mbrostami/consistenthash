@@ -4,9 +4,11 @@ package consistenthash
 import (
 	"bytes"
 	"hash/crc32"
+	"math"
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // HashFunc hash function to generate random hash
@@ -14,12 +16,21 @@ type HashFunc func(data []byte) uint32
 
 // ConsistentHash everything we need for CH
 type ConsistentHash struct {
-	mu       sync.RWMutex
-	hash     HashFunc
-	replicas uint              // default number of replicas in hash ring (higher number means more possibility for balance equality)
-	hKeys    []uint32          // Sorted
-	hTable   map[uint32][]byte // Hash table key value pair (hash(x): x) * replicas (nodes)
-	rTable   map[uint32]uint   // Number of replicas per stored key
+	mu        sync.RWMutex
+	hash      HashFunc
+	replicas  uint              // default number of replicas in hash ring (higher number means more possibility for balance equality)
+	hKeys     []uint32          // Sorted
+	hTable    map[uint32][]byte // Hash table key value pair (hash(x): x) * replicas (nodes)
+	rTable    map[uint32]uint   // Number of replicas per stored key
+	blocks    map[uint32]*block // fixed size blocks in the circle each might contain a list of keys
+	stale     *ConsistentHash
+	lockState atomic.Bool
+}
+
+type block struct {
+	min  int
+	max  int
+	keys map[int]uint32
 }
 
 // New makes new ConsistentHash
@@ -42,6 +53,15 @@ func New(opts ...Option) *ConsistentHash {
 	if ch.hash == nil {
 		ch.hash = crc32.ChecksumIEEE
 	}
+
+	if o.readLockFree {
+		ch.stale = &ConsistentHash{
+			hash:     ch.hash,
+			replicas: ch.replicas,
+			hTable:   make(map[uint32][]byte, 0),
+			rTable:   make(map[uint32]uint, 0),
+		}
+	}
 	return ch
 }
 
@@ -52,8 +72,11 @@ func (ch *ConsistentHash) IsEmpty() bool {
 
 // Add adds some keys to the hash
 func (ch *ConsistentHash) Add(keys ...string) {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
+	if ch.stale != nil {
+		ch.stale.Add(keys...)
+	}
+	ch.lock()
+	defer ch.unlock()
 	ch.add(ch.replicas, keys...)
 }
 
@@ -62,8 +85,11 @@ func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...string) {
 	if replicas < 1 {
 		return
 	}
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
+	if ch.stale != nil {
+		ch.stale.AddReplicas(replicas, keys...)
+	}
+	ch.lock()
+	defer ch.unlock()
 	ch.add(replicas, keys...)
 }
 
@@ -72,8 +98,18 @@ func (ch *ConsistentHash) GetBytes(key []byte) []byte {
 	if ch.IsEmpty() {
 		return nil
 	}
-	ch.mu.RLock()
-	defer ch.mu.RUnlock()
+
+	if ch.stale != nil {
+		if ch.lockState.Load() {
+			return ch.stale.GetBytes(key)
+		}
+	} else {
+		// stale mode
+		// use mutex read lock
+		ch.rLock()
+		defer ch.rUnlock()
+	}
+
 	hash := ch.hash(key)
 
 	// check if the exact match exist in the hash table
@@ -81,8 +117,38 @@ func (ch *ConsistentHash) GetBytes(key []byte) []byte {
 		return v
 	}
 
-	// binary search for appropriate replica
-	idx := sort.Search(len(ch.hKeys), func(i int) bool { return ch.hKeys[i] >= hash })
+	var idx int
+	// check the first and the last hashes
+	if ch.hKeys[len(ch.hKeys)-1] < hash || ch.hKeys[0] > hash {
+		idx = 0
+	} else {
+		// block size is equal to hkeys
+		// binary search for appropriate replica
+		totalKeys := math.MaxUint32 / uint32(len(ch.hKeys))
+		blockNumber := hash / totalKeys
+		var b *block
+		var ok bool
+		var j, h int
+		for blockNumber < uint32(len(ch.hKeys)) {
+			b, ok = ch.blocks[blockNumber]
+			if !ok {
+				blockNumber++
+				continue
+			}
+			idx = b.min
+			j = b.max
+			// similar to sort.Search (binary search)
+			for idx < j {
+				h = int(uint(idx+j) >> 1)
+				if !(b.keys[h] >= hash) {
+					idx = h + 1
+				} else {
+					j = h
+				}
+			}
+			break
+		}
+	}
 
 	// means we have cycled back to the first replica
 	if idx == len(ch.hKeys) {
@@ -109,8 +175,12 @@ func (ch *ConsistentHash) Remove(key string) bool {
 	if ch.IsEmpty() {
 		return true
 	}
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
+	if ch.stale != nil {
+		ch.stale.Remove(key)
+	}
+	ch.lock()
+	defer ch.unlock()
+
 	originalHash := ch.hash([]byte(key))
 
 	replicas, found := ch.rTable[originalHash]
@@ -139,6 +209,8 @@ func (ch *ConsistentHash) Remove(key string) bool {
 		delete(ch.rTable, originalHash) // delete replica numbers
 	}
 
+	ch.buildBlocks()
+
 	return true
 }
 
@@ -161,10 +233,11 @@ func (ch *ConsistentHash) add(replicas uint, keys ...string) {
 	}
 
 	var hash uint32
+	var i int
 	for _, key := range keys {
 		var b bytes.Buffer
 		var h bytes.Buffer
-		for i := 0; i < int(replicas); i++ {
+		for i = 0; i < int(replicas); i++ {
 			b.WriteString(key)
 			h.WriteString(key)
 			if i != 0 { // first item is equal to the key itself
@@ -185,4 +258,47 @@ func (ch *ConsistentHash) add(replicas uint, keys ...string) {
 	sort.Slice(ch.hKeys, func(i, j int) bool {
 		return ch.hKeys[i] < ch.hKeys[j]
 	})
+
+	ch.buildBlocks()
+}
+
+// buildBlocks splits hash table to same size blocks and stores the sorted keys inside specified block
+func (ch *ConsistentHash) buildBlocks() {
+	totalKeys := math.MaxUint32 / uint32(len(ch.hKeys))
+	ch.blocks = make(map[uint32]*block, len(ch.hKeys)) // maybe sync pool helps here
+	var blockNumber uint32
+	for idx, key := range ch.hKeys {
+		blockNumber = key / totalKeys
+		if ch.blocks[blockNumber] == nil {
+			ch.blocks[blockNumber] = &block{
+				min: idx,
+				max: idx,
+				keys: map[int]uint32{
+					idx: key,
+				},
+			}
+			continue
+		}
+
+		ch.blocks[blockNumber].keys[idx] = key
+		ch.blocks[blockNumber].max = idx
+	}
+}
+
+func (ch *ConsistentHash) lock() {
+	ch.mu.Lock()
+	ch.lockState.Store(true)
+}
+
+func (ch *ConsistentHash) unlock() {
+	ch.mu.Unlock()
+	ch.lockState.Store(false)
+}
+
+func (ch *ConsistentHash) rLock() {
+	ch.mu.RLock()
+}
+
+func (ch *ConsistentHash) rUnlock() {
+	ch.mu.RUnlock()
 }

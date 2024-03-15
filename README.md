@@ -20,6 +20,23 @@ If the distribution of the hashed keys is roughly uniform, (The more uniform the
 it means in each block we should expect ~1 key, which should end up to: `O(log(n)) >= time complexity >= O(1)` or `O(log(k))` where `k` is the maximum number of elements in the largest block.   
 The drawback would be more memory usage, and slightly slower writes.        
 
+### Lookup benchmarks:
+**WITHOUT** block partitioning:   
+```
+BenchmarkGetBytes8-10                   75058965                47.06 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes512-10                 49704734                69.32 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes1024-10                45465835                71.45 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes4096-10                48356475                75.26 ns/op            0 B/op          0 allocs/op
+```
+
+**WITH** block partitioning:   
+```
+BenchmarkGetBytes8-10                   82987790                39.08 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes512-10                 104776002               33.42 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes1024-10                99181714                34.33 ns/op            0 B/op          0 allocs/op
+BenchmarkGetBytes4096-10                87755408                35.34 ns/op            0 B/op          0 allocs/op
+```
+
 
 # Addition to the implementation
 To have a lock free lookup I added a stale consistent hash, that is a copy of the original one, and will be used when modification is happening to the original one, and there is an active write lock.    

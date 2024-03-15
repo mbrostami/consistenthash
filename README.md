@@ -10,7 +10,7 @@ This package is implemented based on [golang/groupcache](https://github.com/gola
 
 - `Remove` function added - sort and remove a node (and replicas) from the hash ring
 - int hashes replaced with uint32
-- Number of replicas is now configurable while adding new node (This is useful when capacity is not the same for all nodes)
+- Number of replicas is now configurable while adding new node (useful when capacity is not the same for all nodes)
 
 # Addition to the original algorithm
 To make lookups faster, I used the number of registered keys in hash ring to create a fixed size of blocks (Block Partitioning) that covers the whole ring.  
@@ -116,7 +116,7 @@ func main() {
 
 ```
 
-## Technical Details
+## More about consistent hashing  
 
 You can find some explanation in this blog post: https://liuzhenglaichn.gitbook.io/system-design/advanced/consistent-hashing  
 

@@ -30,7 +30,7 @@ type ConsistentHash struct {
 type block struct {
 	min  int
 	max  int
-	keys map[int]uint32
+	keys map[int]*uint32
 }
 
 // New makes new ConsistentHash
@@ -44,6 +44,7 @@ func New(opts ...Option) *ConsistentHash {
 		hash:     o.hashFunc,
 		hTable:   make(map[uint32][]byte, 0),
 		rTable:   make(map[uint32]uint, 0),
+		blocks:   make(map[uint32]*block, 0),
 	}
 
 	if ch.replicas < 1 {
@@ -71,7 +72,7 @@ func (ch *ConsistentHash) IsEmpty() bool {
 }
 
 // Add adds some keys to the hash
-func (ch *ConsistentHash) Add(keys ...string) {
+func (ch *ConsistentHash) Add(keys ...[]byte) {
 	if ch.stale != nil {
 		ch.stale.Add(keys...)
 	}
@@ -81,7 +82,7 @@ func (ch *ConsistentHash) Add(keys ...string) {
 }
 
 // AddReplicas adds key and generates "replicas" number of hashes in ring
-func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...string) {
+func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...[]byte) {
 	if replicas < 1 {
 		return
 	}
@@ -93,15 +94,15 @@ func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...string) {
 	ch.add(replicas, keys...)
 }
 
-// GetBytes gets the closest item in the hash ring to the provided key as []byte
-func (ch *ConsistentHash) GetBytes(key []byte) []byte {
+// Get gets the closest item in the hash ring to the provided key as []byte
+func (ch *ConsistentHash) Get(key []byte) []byte {
 	if ch.IsEmpty() {
 		return nil
 	}
 
 	if ch.stale != nil {
 		if ch.lockState.Load() {
-			return ch.stale.GetBytes(key)
+			return ch.stale.Get(key)
 		}
 	} else {
 		// stale mode
@@ -140,7 +141,7 @@ func (ch *ConsistentHash) GetBytes(key []byte) []byte {
 			// similar to sort.Search (binary search)
 			for idx < j {
 				h = int(uint(idx+j) >> 1)
-				if !(b.keys[h] >= hash) {
+				if b.keys[h] != nil && !(*b.keys[h] >= hash) {
 					idx = h + 1
 				} else {
 					j = h
@@ -162,16 +163,16 @@ func (ch *ConsistentHash) GetBytes(key []byte) []byte {
 	return nil
 }
 
-// Get gets the closest item in the hash ring to the provided key
-func (ch *ConsistentHash) Get(key string) string {
-	if v := ch.GetBytes([]byte(key)); v != nil {
+// GetString gets the closest item in the hash ring to the provided key
+func (ch *ConsistentHash) GetString(key string) string {
+	if v := ch.Get([]byte(key)); v != nil {
 		return string(v)
 	}
 	return ""
 }
 
 // Remove removes the key from hash table
-func (ch *ConsistentHash) Remove(key string) bool {
+func (ch *ConsistentHash) Remove(key []byte) bool {
 	if ch.IsEmpty() {
 		return true
 	}
@@ -181,7 +182,7 @@ func (ch *ConsistentHash) Remove(key string) bool {
 	ch.lock()
 	defer ch.unlock()
 
-	originalHash := ch.hash([]byte(key))
+	originalHash := ch.hash(key)
 
 	replicas, found := ch.rTable[originalHash]
 	if !found {
@@ -192,11 +193,12 @@ func (ch *ConsistentHash) Remove(key string) bool {
 	var err error
 	var b bytes.Buffer
 	var hash uint32
-	for i := 0; i < int(replicas); i++ {
-		if _, err = b.WriteString(key); err != nil {
+	var i uint32
+	for i = 0; i < uint32(replicas); i++ {
+		if _, err = b.Write(key); err != nil {
 			return false
 		}
-		if _, err = b.WriteString(strconv.Itoa(i)); err != nil {
+		if _, err = b.WriteString(strconv.Itoa(int(i))); err != nil {
 			return false
 		}
 		hash = ch.hash(b.Bytes())
@@ -225,7 +227,7 @@ func (ch *ConsistentHash) removeHashKey(hash uint32) {
 }
 
 // add inserts new hashes in hash table
-func (ch *ConsistentHash) add(replicas uint, keys ...string) {
+func (ch *ConsistentHash) add(replicas uint, keys ...[]byte) {
 	// increase the capacity of the slice
 	n := len(keys) * int(replicas)
 	if n -= cap(ch.hKeys) - len(ch.hKeys); n > 0 { // check if we need to grow the slice
@@ -233,15 +235,15 @@ func (ch *ConsistentHash) add(replicas uint, keys ...string) {
 	}
 
 	var hash uint32
-	var i int
-	for _, key := range keys {
+	var i uint32
+	for idx := range keys {
 		var b bytes.Buffer
 		var h bytes.Buffer
-		for i = 0; i < int(replicas); i++ {
-			b.WriteString(key)
-			h.WriteString(key)
+		for i = 0; i < uint32(replicas); i++ {
+			b.Write(keys[idx])
+			h.Write(keys[idx])
 			if i != 0 { // first item is equal to the key itself
-				h.WriteString(strconv.Itoa(i))
+				h.WriteString(strconv.Itoa(int(i)))
 			}
 			hash = ch.hash(h.Bytes())
 			ch.hKeys = append(ch.hKeys, hash)
@@ -251,10 +253,11 @@ func (ch *ConsistentHash) add(replicas uint, keys ...string) {
 		}
 		// do not store number of replicas if uses default number
 		if replicas != ch.replicas {
-			ch.rTable[ch.hash([]byte(key))] = replicas
+			ch.rTable[ch.hash(keys[idx])] = replicas
 		}
 	}
 	// Sort hKeys
+	// SortUInts(ch.hKeys)
 	sort.Slice(ch.hKeys, func(i, j int) bool {
 		return ch.hKeys[i] < ch.hKeys[j]
 	})
@@ -265,22 +268,18 @@ func (ch *ConsistentHash) add(replicas uint, keys ...string) {
 // buildBlocks splits hash table to same size blocks and stores the sorted keys inside specified block
 func (ch *ConsistentHash) buildBlocks() {
 	totalKeys := math.MaxUint32 / uint32(len(ch.hKeys))
-	ch.blocks = make(map[uint32]*block, len(ch.hKeys)) // maybe sync pool helps here
+	//ch.blocks = make(map[uint32]*block, len(ch.hKeys)) // maybe sync pool helps here
 	var blockNumber uint32
-	for idx, key := range ch.hKeys {
-		blockNumber = key / totalKeys
+	for idx := range ch.hKeys {
+		blockNumber = ch.hKeys[idx] / totalKeys
 		if ch.blocks[blockNumber] == nil {
 			ch.blocks[blockNumber] = &block{
-				min: idx,
-				max: idx,
-				keys: map[int]uint32{
-					idx: key,
-				},
+				min:  idx,
+				keys: make(map[int]*uint32, 1),
 			}
-			continue
 		}
 
-		ch.blocks[blockNumber].keys[idx] = key
+		ch.blocks[blockNumber].keys[idx] = &ch.hKeys[idx]
 		ch.blocks[blockNumber].max = idx
 	}
 }

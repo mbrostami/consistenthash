@@ -1,10 +1,11 @@
 package consistenthash
 
 type options struct {
-	defaultReplicas uint
-	initialRingSize int
-	readLockFree    bool
-	hashFunc        HashFunc
+	hashFunc          HashFunc
+	initialRingSize   int
+	defaultReplicas   uint
+	readLockFree      bool
+	blockPartitioning bool
 }
 
 type Option func(*options)
@@ -25,5 +26,12 @@ func WithHashFunc(hashFunc HashFunc) Option {
 func WithReadLockFree(readLockFree bool) Option {
 	return func(o *options) {
 		o.readLockFree = readLockFree
+	}
+}
+
+// WithBlockPartitioning uses block partitioning
+func WithBlockPartitioning(bp bool) Option {
+	return func(o *options) {
+		o.blockPartitioning = bp
 	}
 }

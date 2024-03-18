@@ -3,7 +3,6 @@ package consistenthash
 import (
 	"bytes"
 	"fmt"
-	"hash/crc32"
 	"strconv"
 	"testing"
 )
@@ -12,9 +11,27 @@ func TestHashing(t *testing.T) {
 
 	// Override the hash function to return easier to reason about values. Assumes
 	// the keys can be converted to an integer.
-	hash := New(WithDefaultReplicas(3), WithHashFunc(crc32.ChecksumIEEE))
+	hash := New(WithDefaultReplicas(3), WithHashFunc(func(key []byte) uint32 {
+		str := string(key[0])
+		if len(key) > 4 {
+			n := 0
+			for i := 1; i < len(key); i++ {
+				n += int(key[i])
+			}
+			if n != 0 {
+				str += strconv.Itoa(n)
+			}
+		} else {
+			for i := 1; i < len(key); i++ {
+				str += string(key[i])
+			}
+		}
+		i, _ := strconv.Atoi(str)
+		return uint32(i)
+	}))
 
 	// Given the above hash function, this will give replicas with "hashes":
+	// 2,4,6,21,22,41,42,61,62
 	hash.Add([]byte("6"), []byte("4"), []byte("2"))
 	testCases := map[string]string{
 		"2":  "2",
@@ -61,10 +78,21 @@ func TestReplication(t *testing.T) {
 
 	// Default replica is 1
 	hash := New(WithDefaultReplicas(1), WithHashFunc(func(key []byte) uint32 {
-		i, err := strconv.Atoi(string(key))
-		if err != nil {
-			panic(err)
+		str := string(key[0])
+		if len(key) > 4 {
+			n := 0
+			for i := 1; i < len(key); i++ {
+				n += int(key[i])
+			}
+			if n != 0 {
+				str += strconv.Itoa(n)
+			}
+		} else {
+			for i := 1; i < len(key); i++ {
+				str += string(key[i])
+			}
 		}
+		i, _ := strconv.Atoi(str)
 		return uint32(i)
 	}))
 

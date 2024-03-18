@@ -213,7 +213,7 @@ func (ch *ConsistentHash) Remove(key []byte) bool {
 
 	var hash uint32
 	var i uint32
-	for i = 0; i < uint32(replicas); i++ {
+	for i = 1; i < uint32(replicas); i++ {
 		var b bytes.Buffer
 		b.Write(key)
 		b.Write([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
@@ -257,7 +257,7 @@ func (ch *ConsistentHash) add(replicas uint, keys ...[]byte) {
 		hash = ch.hash(keys[idx])
 		ch.hKeys = append(ch.hKeys, hash)
 		ch.hTable[hash] = keys[idx][:len(keys[idx]):len(keys[idx])]
-		for i = 0; i < uint32(replicas); i++ {
+		for i = 1; i < uint32(replicas); i++ {
 			h.Write(keys[idx])
 			h.Write([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
 			hash = ch.hash(h.Bytes())

@@ -13,58 +13,102 @@ This package is implemented based on [golang/groupcache](https://github.com/gola
 - Number of replicas is now configurable while adding new node (useful when capacity is not the same for all nodes)
 
 # Addition to the original algorithm
-To make lookups faster, I used the number of registered keys in hash ring to create a fixed size of blocks (Block Partitioning) that covers the whole ring.  
+To make lookups faster, I used the number of registered keys divided by a number (d) in hash ring to create a fixed size of blocks (Block Partitioning) that covers the whole ring.  
 Each block consist of zero/multiple sorted keys that are also exist in hash ring, during the lookup, the block number will be calculated with time complexity as O(1).  
 Then a binary search will be applied on the keys in that block and index of the key will be returned.   
 If the distribution of the hashed keys is roughly uniform, (The more uniform the distribution, the more effective and predictable the performance)       
-it means in each block we should expect ~1 key, which should end up to: `O(log(n)) >= time complexity >= O(1)` or `O(log(k))` where `k` is the maximum number of elements in the largest block.   
-The drawback would be more memory usage, and slightly slower writes.        
+it means in each block we should expect ~1 key when d = 1, which should end up to: `O(log(n)) >= time complexity >= O(1)` or `O(log(k))` where `k` is the maximum number of elements in the largest block.   
+The drawback would be slightly slower writes.       
 
 ### Lookup benchmarks:
 **WITHOUT** block partitioning:   
 ```
-BenchmarkGetBytes8-10                   75058965                47.06 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes512-10                 49704734                69.32 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes1024-10                45465835                71.45 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes4096-10                48356475                75.26 ns/op            0 B/op          0 allocs/op
+BenchmarkGet8x50-10                 1000                65.0 ns/op             0 B/op          0 allocs/op
+BenchmarkGet512x50-10               1000               164.4 ns/op             0 B/op          0 allocs/op
+BenchmarkGet1024x50-10              1000               348.6 ns/op             0 B/op          0 allocs/op
+BenchmarkGet4096x50-10              1000               385.4 ns/op             0 B/op          0 allocs/op
+BenchmarkGet200000x50-10            1000              1476.0 ns/op             0 B/op          0 allocs/op
 ```
 
-**WITH** block partitioning:   
+**WITH** block partitioning with size of total keys / 5:   
 ```
-BenchmarkGetBytes8-10                   82987790                39.08 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes512-10                 104776002               33.42 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes1024-10                99181714                34.33 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes4096-10                87755408                35.34 ns/op            0 B/op          0 allocs/op
+BenchmarkGet8BPx50-10               1000                33.4 ns/op             0 B/op          0 allocs/op
+BenchmarkGet512BPx50-10             1000               103.9 ns/op             0 B/op          0 allocs/op
+BenchmarkGet1024BPx50-10            1000               135.2 ns/op             0 B/op          0 allocs/op
+BenchmarkGet4096BPx50-10            1000               229.0 ns/op             0 B/op          0 allocs/op
+BenchmarkGet200000BPx50-10          1000               343.5 ns/op             0 B/op          0 allocs/op
 ```
 
+### Block Partitioning Distribution 
+#### Explanation
+Before running into the experiment consider an example where you have 10 keys:   
+If you have 1 block per key, so 10 blocks, means you MIGHT have 1 key in each block but that's not always the case, you may have a block with 2 keys and one with no keys.   
+So we need to skip the block that doesn't have any key in it and jump to the next block. Let's call this `Missed blocks`.  
 
-# Addition to the implementation
-To have a lock free lookup I added a stale consistent hash, that is a copy of the original one, and will be used when modification is happening to the original one, and there is an active write lock.    
-You can enable this feature by passing `WithReadLockFree(true)` as option to the constructor.   
+#### Experiment:  
+Let's have 10M keys added to the ring hash with `crc32.ChecksumIEEE` as hash function.  
+I used `WithMetrics()` to collect the metrics for missed blocks.  
+
+1. To have 1 block per key (10M blocks) I used `WithBlockPartitioning(1)` option.
+   Here is the missed blocks for 10k random lookups:  
+    ```
+    [0:3746 1:1503 2:753 3:437 4:230 5:106 6:50 7:24 8:10 9:6 10:3 11:1 12:1]
+    
+    Where:
+     
+    3746 lookups jumped to the second block which:
+    1503 of those lookups jumped to the third block which:
+    753  of those lookups jumped to the fourth block which:
+    ...
+    1 of those lookups jumped to 13th block
+    ```     
+
+2. To have 1 block for each 5 keys (2M blocks) I used `WithBlockPartitioning(5)` option.
+   Here is the missed blocks for 10k random lookups:
+    ```
+    [0:236 1:5]
+    
+    Where:
+     
+    236 lookups jumped to the second block which: 
+    5 of those lookups jumped to the third block
+    ```     
+3. To have 1 block for each 10 keys (1M blocks) I used `WithBlockPartitioning(10)` option.
+   Here is the missed blocks for 10k random lookups:
+    ```
+    [0:5]
+    
+    Where:
+     
+    5 lookups jumped to the second block
+    ```     
+
 
 # Benchmark
-Each numbers in front of the benchmark name specifies how many keys (*50 replicas) will be added to the ring, so 4096 means (4096 * 50) keys.   
+Each numbers in front of the benchmark name specifies how many keys (x50 replicas) will be added to the ring, so 4096 means (4096 * 50) keys.  
+`BenchmarkGet8x50` adds 8*50 keys to the ring, with no block partitioning.  
+`BenchmarkGet8BPx50` adds 8*50 keys to the ring, with block partitioning with size of: (total keys / 5)
 ```bash
-> go test . -run none -bench Benchmark -benchtime 3s -benchmem                                                                                                                                                                                                                                                                                                                                                               ─╯
+> go test ./... -run none -bench Benchmark -benchtime 1000x -benchmem                                                                                                                                                                                                                                                                                                                                                        ─╯
 goos: darwin
 goarch: arm64
 pkg: github.com/mbrostami/consistenthash/v2
-BenchmarkGetBytes8-10                   82987790                39.08 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes512-10                 104776002               33.42 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes1024-10                99181714                34.33 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytes4096-10                87755408                35.34 ns/op            0 B/op          0 allocs/op
 
-BenchmarkGetBytesLockFree8-10           93126028                37.07 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytesLockFree512-10         125311168               33.47 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytesLockFree1024-10        124805904               28.16 ns/op            0 B/op          0 allocs/op
-BenchmarkGetBytesLockFree4096-10        110532616               32.00 ns/op            0 B/op          0 allocs/op
+BenchmarkGet8x50-10                 1000                65.0 ns/op             0 B/op          0 allocs/op
+BenchmarkGet512x50-10               1000               164.4 ns/op             0 B/op          0 allocs/op
+BenchmarkGet1024x50-10              1000               348.6 ns/op             0 B/op          0 allocs/op
+BenchmarkGet4096x50-10              1000               385.4 ns/op             0 B/op          0 allocs/op
+BenchmarkGet200000x50-10            1000             23234.0 ns/op             0 B/op          0 allocs/op
+BenchmarkAdd8x50-10                 1000          26563219.0 ns/op         78102 B/op         16 allocs/op
+BenchmarkRemove128x50-10            1000             10888.0 ns/op          3200 B/op         50 allocs/op
 
-BenchmarkGet8-10                        57106448                65.85 ns/op           16 B/op          1 allocs/op
-BenchmarkGet512-10                      32213743               113.1 ns/op            16 B/op          1 allocs/op
-BenchmarkGetLockFree8-10                61985605                61.30 ns/op           16 B/op          1 allocs/op
-BenchmarkGetLockFree512-10              32160564               107.0 ns/op            16 B/op          1 allocs/op
-
-ok      github.com/mbrostami/consistenthash/v2  105.845s
+BenchmarkGet8BPx50-10               1000                33.4 ns/op             0 B/op          0 allocs/op
+BenchmarkGet512BPx50-10             1000               103.9 ns/op             0 B/op          0 allocs/op
+BenchmarkGet1024BPx50-10            1000               135.2 ns/op             0 B/op          0 allocs/op
+BenchmarkGet4096BPx50-10            1000               229.0 ns/op             0 B/op          0 allocs/op
+BenchmarkGet200000BPx50-10          1000               343.5 ns/op             0 B/op          0 allocs/op
+BenchmarkAdd8BPx50-10               1000          29747129.0 ns/op         82258 B/op         18 allocs/op
+BenchmarkRemove128BPx50-10          1000             22609.0 ns/op          6736 B/op         54 allocs/op
 
 
 ```

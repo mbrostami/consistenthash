@@ -5,7 +5,7 @@ type options struct {
 	initialRingSize   int
 	defaultReplicas   uint
 	readLockFree      bool
-	blockPartitioning bool
+	blockPartitioning int
 }
 
 type Option func(*options)
@@ -29,9 +29,9 @@ func WithReadLockFree(readLockFree bool) Option {
 	}
 }
 
-// WithBlockPartitioning uses block partitioning
-func WithBlockPartitioning(bp bool) Option {
+// WithBlockPartitioning uses block partitioning, divides total number of keys to divisionBy to get the number of blocks
+func WithBlockPartitioning(divisionBy int) Option {
 	return func(o *options) {
-		o.blockPartitioning = bp
+		o.blockPartitioning = divisionBy
 	}
 }

@@ -3,6 +3,7 @@ package consistenthash
 import (
 	"bytes"
 	"fmt"
+	"hash/crc32"
 	"strconv"
 	"testing"
 )
@@ -11,18 +12,10 @@ func TestHashing(t *testing.T) {
 
 	// Override the hash function to return easier to reason about values. Assumes
 	// the keys can be converted to an integer.
-	hash := New(WithDefaultReplicas(3), WithHashFunc(func(key []byte) uint32 {
-		i, err := strconv.Atoi(string(key))
-		if err != nil {
-			panic(err)
-		}
-		return uint32(i)
-	}))
+	hash := New(WithDefaultReplicas(3), WithHashFunc(crc32.ChecksumIEEE))
 
 	// Given the above hash function, this will give replicas with "hashes":
-	// 6,61,62,4,41,42,2,21,22
 	hash.Add([]byte("6"), []byte("4"), []byte("2"))
-
 	testCases := map[string]string{
 		"2":  "2",
 		"11": "2",
@@ -143,20 +136,22 @@ func TestConsistency(t *testing.T) {
 
 }
 
-func BenchmarkGetBytes8(b *testing.B)       { benchmarkGetBytes(b, 8, false, false) }
-func BenchmarkGetBytes512(b *testing.B)     { benchmarkGetBytes(b, 512, false, false) }
-func BenchmarkGetBytes1024(b *testing.B)    { benchmarkGetBytes(b, 1024, false, false) }
-func BenchmarkGetBytes4096nbp(b *testing.B) { benchmarkGetBytes(b, 4096, false, false) }
-func BenchmarkGetBytes4096bp(b *testing.B)  { benchmarkGetBytes(b, 4096, false, true) }
+func BenchmarkGetBytes8(b *testing.B)       { benchmarkGetBytes(b, 8, false, 0) }
+func BenchmarkGetBytes512(b *testing.B)     { benchmarkGetBytes(b, 512, false, 0) }
+func BenchmarkGetBytes1024(b *testing.B)    { benchmarkGetBytes(b, 1024, false, 0) }
+func BenchmarkGetBytes4096nbp(b *testing.B) { benchmarkGetBytes(b, 4096, false, 0) }
+func BenchmarkGetBytes4096bp(b *testing.B)  { benchmarkGetBytes(b, 4096, false, 1) }
+func BenchmarkGetBytes4096bp5(b *testing.B) { benchmarkGetBytes(b, 4096, false, 5) }
 
-func BenchmarkAdd4096nbp(b *testing.B) { benchmarkAdd(b, 4096, false, false) }
+func BenchmarkAdd128nbp(b *testing.B)  { benchmarkAdd(b, 128, false, 0) }
+func BenchmarkAdd128bp(b *testing.B)   { benchmarkAdd(b, 128, false, 5) }
+func BenchmarkAdd128bp10(b *testing.B) { benchmarkAdd(b, 128, false, 20) }
 
-// func BenchmarkGetBytes100000(b *testing.B)  { benchmarkGetBytes(b, 100000, false, false) }
+func BenchmarkGetBytes200000NoPartitioning(b *testing.B)   { benchmarkGetBytes(b, 200000, false, 0) }
+func BenchmarkGetBytes200000WithPartitioning(b *testing.B) { benchmarkGetBytes(b, 200000, false, 5) }
 
-func BenchmarkGet8(b *testing.B)           { benchmarkGet(b, 8, false) }
-func BenchmarkGet512(b *testing.B)         { benchmarkGet(b, 512, false) }
-func BenchmarkGetLockFree8(b *testing.B)   { benchmarkGet(b, 8, true) }
-func BenchmarkGetLockFree512(b *testing.B) { benchmarkGet(b, 512, true) }
+func BenchmarkGet8(b *testing.B)   { benchmarkGet(b, 8, false) }
+func BenchmarkGet512(b *testing.B) { benchmarkGet(b, 512, false) }
 
 func benchmarkGet(b *testing.B, shards int, readLockFree bool) {
 
@@ -176,39 +171,34 @@ func benchmarkGet(b *testing.B, shards int, readLockFree bool) {
 	}
 }
 
-func benchmarkAdd(b *testing.B, shards int, readLockFree, blockPartitioning bool) {
+func benchmarkAdd(b *testing.B, shards int, readLockFree bool, blockPartitionDivision int) {
 
 	hash := New(
 		WithDefaultReplicas(50*uint(shards)),
 		WithReadLockFree(readLockFree),
-		WithBlockPartitioning(blockPartitioning),
+		WithBlockPartitioning(blockPartitionDivision),
 	)
 	b.ResetTimer()
-	var str bytes.Buffer
 	for i := 0; i < b.N; i++ {
+		var str bytes.Buffer
 		str.WriteString(fmt.Sprintf("%d", i))
 		hash.Add(str.Bytes())
-		str.Reset()
 	}
 }
 
-func benchmarkGetBytes(b *testing.B, shards int, readLockFree, blockPartitioning bool) {
-
+func benchmarkGetBytes(b *testing.B, shards int, readLockFree bool, blockPartitionDivision int) {
 	hash := New(
 		WithDefaultReplicas(50),
 		WithReadLockFree(readLockFree),
-		WithBlockPartitioning(blockPartitioning),
+		WithBlockPartitioning(blockPartitionDivision),
 	)
 	var lookups [][]byte
 	var buckets [][]byte
-	var str bytes.Buffer
 	for i := 0; i < shards; i++ {
-		str.WriteString(fmt.Sprintf("%d", i))
-		buckets = append(buckets, str.Bytes())
-		str.Reset()
+		var str bytes.Buffer
+		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
 		str.WriteString(fmt.Sprintf("shard-x-%d", i))
 		lookups = append(lookups, str.Bytes())
-		str.Reset()
 	}
 	hash.Add(buckets...)
 

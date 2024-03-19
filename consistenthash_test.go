@@ -182,12 +182,6 @@ func BenchmarkAdd8BPx50(b *testing.B)      { benchmarkAdd(b, 8, false, 5) }
 func BenchmarkAddBulk8BPx50(b *testing.B)  { benchmarkBulkAdd(b, 8, false, 5) }
 func BenchmarkRemove128BPx50(b *testing.B) { benchmarkRemove(b, 128, false, 5) }
 
-func BenchmarkGet8BPx50_100(b *testing.B)      { benchmarkGet(b, 8, false, 100) }
-func BenchmarkGet512BPx50_100(b *testing.B)    { benchmarkGet(b, 512, false, 100) }
-func BenchmarkGet1024BPx50_100(b *testing.B)   { benchmarkGet(b, 1024, false, 100) }
-func BenchmarkGet4096BPx50_100(b *testing.B)   { benchmarkGet(b, 4096, false, 100) }
-func BenchmarkGet200000BPx50_100(b *testing.B) { benchmarkGet(b, 200000, false, 100) }
-
 func BenchmarkStringGet8x50(b *testing.B)   { benchmarkGetString(b, 8, false) }
 func BenchmarkStringGet512x50(b *testing.B) { benchmarkGetString(b, 512, false) }
 
@@ -233,11 +227,13 @@ func benchmarkAdd(b *testing.B, shards int, readLockFree bool, blockPartitionDiv
 		WithReadLockFree(readLockFree),
 		WithBlockPartitioning(blockPartitionDivision),
 	)
+	var buckets [][]byte
+	for i := 0; i < b.N; i++ {
+		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var str bytes.Buffer
-		str.WriteString(fmt.Sprintf("%d", i))
-		hash.Add(str.Bytes())
+		hash.Add(buckets[i])
 	}
 }
 
@@ -265,7 +261,7 @@ func benchmarkGet(b *testing.B, shards int, readLockFree bool, blockPartitionDiv
 		WithDefaultReplicas(50),
 		WithReadLockFree(readLockFree),
 		WithBlockPartitioning(blockPartitionDivision),
-		WithMetrics(),
+		//WithMetrics(),
 	)
 	var lookups [][]byte
 	var buckets [][]byte
@@ -281,5 +277,5 @@ func benchmarkGet(b *testing.B, shards int, readLockFree bool, blockPartitionDiv
 	for i := 0; i < b.N; i++ {
 		hash.Get(lookups[i%(shards-1)])
 	}
-	b.Logf("missed: %+v", hash.Metrics())
+	//b.Logf("metrics: %+v", hash.Metrics())
 }

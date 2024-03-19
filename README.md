@@ -45,9 +45,25 @@ Before running into the experiment consider an example where you have 10 keys:
 If you have 1 block per key, so 10 blocks, means you MIGHT have 1 key in each block but that's not always the case, you may have a block with 2 keys and one with no keys.   
 So we need to skip the block that doesn't have any key in it and jump to the next block. Let's call this `Missed blocks`.  
 
-#### Experiment:  
-Let's have 10M keys added to the ring hash with `crc32.ChecksumIEEE` as hash function.  
-I used `WithMetrics()` to collect the metrics for missed blocks.  
+#### Key Distribution (block size):
+For 4096x50 = 204k added keys with avg 5 keys in each block we will have around 40k blocks with following distribution:    
+```
+[1:2578 2:5583 3:7070 4:5692 5:4270 6:3477 7:3291 8:2733 9:2098 10:1578 11:1094 12:629 13:290 14:98 15:30 16:8 17:3]
+```
+2578 blocks with 1 key  
+5583 blocks with 2 keys  
+7070 blocks with 3 keys  
+5692 blocks with 4 keys  
+4270 blocks with 5 keys  
+3477 blocks with 6 keys  
+3291 blocks with 7 keys  
+2733 blocks with 8 keys  
+...  
+3 blocks with 17 keys  
+
+
+#### Experiment Missed Blocks:  
+Let's have 10M keys added to the ring hash with `crc32.ChecksumIEEE` as hash function. I used `WithMetrics()` to collect the metrics for missed blocks.  
 
 1. To have 1 block per key (10M blocks) I used `WithBlockPartitioning(1)` option.
    Here is the missed blocks for 10k random lookups:  

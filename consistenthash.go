@@ -17,21 +17,16 @@ type HashFunc func(data []byte) uint32
 type ConsistentHash struct {
 	mu                sync.RWMutex
 	hash              HashFunc
-	replicas          uint              // default number of replicas in hash ring (higher number means more possibility for balance equality)
-	hKeys             []uint32          // Sorted
-	hTable            map[uint32][]byte // Hash table key value pair (hash(x): x) * replicas (nodes)
-	rTable            map[uint32]uint   // Number of replicas per stored key
-	blocks            map[uint32]block  // fixed size blocks in the circle each might contain a list of keys
+	replicas          uint                 // default number of replicas in hash ring (higher number means more possibility for balance equality)
+	hKeys             []uint32             // Sorted
+	hTable            map[uint32][]byte    // Hash table key value pair (hash(x): x) * replicas (nodes)
+	rTable            map[uint32]uint      // Number of replicas per stored key
+	blocks            map[uint32][2]uint32 // fixed size blocks in the circle each might contain a list of min/max ids
 	totalBlocks       uint32
-	missed            map[int]int
+	metrics           map[string]map[int]int
 	stale             *ConsistentHash
 	lockState         atomic.Bool
 	blockPartitioning int
-}
-
-type block struct {
-	min uint32
-	max uint32
 }
 
 // New makes new ConsistentHash
@@ -47,7 +42,7 @@ func New(opts ...Option) *ConsistentHash {
 		rTable:   make(map[uint32]uint, 0),
 	}
 	if o.metrics {
-		ch.missed = make(map[int]int, 0)
+		ch.metrics = make(map[string]map[int]int, 0)
 	}
 
 	if ch.replicas < 1 {
@@ -60,7 +55,7 @@ func New(opts ...Option) *ConsistentHash {
 
 	ch.blockPartitioning = o.blockPartitioning
 	if o.blockPartitioning > 0 {
-		ch.blocks = make(map[uint32]block, 0)
+		ch.blocks = make(map[uint32][2]uint32, 0)
 	}
 
 	if o.readLockFree {
@@ -76,7 +71,18 @@ func New(opts ...Option) *ConsistentHash {
 
 // Metrics return the collected metrics
 func (ch *ConsistentHash) Metrics() any {
-	return ch.missed
+	// block size distribution
+	if ch.blockPartitioning > 0 {
+		ch.metrics["blockSize"] = make(map[int]int, 0)
+		for _, uint32s := range ch.blocks {
+			if uint32s[1] == 0 && uint32s[0] == 0 {
+				ch.metrics["blockSize"][0]++
+			} else {
+				ch.metrics["blockSize"][int(uint32s[1]-uint32s[0])+1]++
+			}
+		}
+	}
+	return ch.metrics
 }
 
 // IsEmpty returns true if there are no items available
@@ -107,7 +113,7 @@ func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...[]byte) {
 	ch.add(replicas, keys...)
 }
 
-// Get gets the closest item in the hash ring to the provided key as []byte
+// Get finds the closest item in the hash ring to the provided key
 func (ch *ConsistentHash) Get(key []byte) []byte {
 	if ch.IsEmpty() {
 		return nil
@@ -139,37 +145,7 @@ func (ch *ConsistentHash) Get(key []byte) []byte {
 		// binary search for appropriate replica
 		idx = uint32(sort.Search(len(ch.hKeys), func(i int) bool { return ch.hKeys[i] >= hash }))
 	} else {
-		// block size is equal to hkeys
-		// binary search for appropriate replica
-		blockSize := math.MaxUint32 / ch.totalBlocks
-		blockNumber := hash / blockSize
-		var b block
-		var ok bool
-		var i int
-		var j, h uint32
-		for blockNumber < ch.totalBlocks {
-			b, ok = ch.blocks[blockNumber]
-			if !ok {
-				blockNumber++
-				if ch.missed != nil {
-					ch.missed[i]++ // collect number of missed blocks for debugging
-					i++
-				}
-				continue
-			}
-			idx = b.min
-			j = b.max
-			// similar to sort.Search (binary search)
-			for idx < j {
-				h = (idx + j) >> 1
-				if h < uint32(len(ch.hKeys)) && ch.hKeys[h] >= hash {
-					j = h
-				} else {
-					idx = h + 1
-				}
-			}
-			break
-		}
+		idx, _ = ch.lookupFromBlock(hash)
 	}
 
 	// means we have cycled back to the first replica
@@ -232,13 +208,14 @@ func (ch *ConsistentHash) Remove(key []byte) bool {
 	return true
 }
 
-// removeHashKey remove item from sorted hKeys and keep it sorted O(n)
+// removeHashKey remove item from sorted hKeys and keep it sorted
 func (ch *ConsistentHash) removeHashKey(hash uint32) {
-	for i := range ch.hKeys {
-		if ch.hKeys[i] == hash {
-			ch.hKeys = append(ch.hKeys[:i], ch.hKeys[i+1:]...)
-			return
-		}
+	idx := sort.Search(len(ch.hKeys), func(i int) bool { return ch.hKeys[i] >= hash })
+	if idx == len(ch.hKeys) {
+		return
+	}
+	if ch.hKeys[idx] == hash {
+		ch.hKeys = append(ch.hKeys[:idx], ch.hKeys[idx+1:]...)
 	}
 }
 
@@ -256,12 +233,17 @@ func (ch *ConsistentHash) add(replicas uint, keys ...[]byte) {
 	for idx := range keys {
 		hash = ch.hash(keys[idx])
 		ch.hKeys = append(ch.hKeys, hash)
+		// no need for extra capacity, just get the bytes we need
 		ch.hTable[hash] = keys[idx][:len(keys[idx]):len(keys[idx])]
 		for i = 1; i < uint32(replicas); i++ {
 			h.Write(keys[idx])
-			h.Write([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
+			h.WriteByte(byte(i))
+			h.WriteByte(byte(i >> 8))
+			h.WriteByte(byte(i >> 16))
+			h.WriteByte(byte(i >> 24))
 			hash = ch.hash(h.Bytes())
 			ch.hKeys = append(ch.hKeys, hash)
+			// no need for extra capacity, just get the bytes we need
 			ch.hTable[hash] = keys[idx][:len(keys[idx]):len(keys[idx])]
 			h.Reset()
 		}
@@ -273,9 +255,7 @@ func (ch *ConsistentHash) add(replicas uint, keys ...[]byte) {
 	}
 
 	// Sort hKeys
-	sort.Slice(ch.hKeys, func(i, j int) bool {
-		return ch.hKeys[i] < ch.hKeys[j]
-	})
+	SortUints(ch.hKeys)
 
 	ch.buildBlocks(false)
 }
@@ -287,24 +267,68 @@ func (ch *ConsistentHash) buildBlocks(rebuild bool) {
 	}
 	ch.totalBlocks = uint32(len(ch.hKeys) / ch.blockPartitioning)
 	if rebuild {
-		ch.blocks = make(map[uint32]block, ch.totalBlocks)
+		ch.blocks = make(map[uint32][2]uint32, ch.totalBlocks)
 	}
 	blockSize := math.MaxUint32 / ch.totalBlocks
 	var blockNumber uint32
 	var ok bool
-	var b block
+	var b [2]uint32
 	for idx := range ch.hKeys {
 		blockNumber = ch.hKeys[idx] / blockSize
 		b, ok = ch.blocks[blockNumber]
 		if !ok {
-			b = block{
-				min: uint32(idx),
-			}
+			b[0] = uint32(idx) // min
 		}
-
-		b.max = uint32(idx)
+		b[1] = uint32(idx) // max
 		ch.blocks[blockNumber] = b
 	}
+}
+
+// lookupFromBlock finds the block number and index of the given hash
+func (ch *ConsistentHash) lookupFromBlock(hash uint32) (uint32, uint32) {
+	// block size is equal to hkeys
+	// binary search for appropriate replica
+	blockSize := math.MaxUint32 / ch.totalBlocks
+	blockNumber := hash / blockSize
+	var b [2]uint32
+	var ok bool
+	var i int
+	var idx, j, h uint32
+	for blockNumber < ch.totalBlocks {
+		b, ok = ch.blocks[blockNumber]
+		if !ok {
+			blockNumber++
+			if ch.metrics != nil {
+				ch.storeMissed(i)
+				i++
+			}
+			continue
+		}
+		idx = b[0] // min
+		j = b[1]   // max
+		// similar to sort.Search (binary search)
+		for idx < j {
+			h = (idx + j) >> 1
+			if h < uint32(len(ch.hKeys)) && ch.hKeys[h] >= hash {
+				j = h
+			} else {
+				idx = h + 1
+			}
+		}
+		break
+	}
+	return idx, blockNumber
+}
+
+// storeMissed collect number of missed blocks for debugging
+func (ch *ConsistentHash) storeMissed(i int) {
+	if ch.metrics == nil {
+		return
+	}
+	if ch.metrics["missed"] == nil {
+		ch.metrics["missed"] = make(map[int]int, 0)
+	}
+	ch.metrics["missed"][i]++
 }
 
 func (ch *ConsistentHash) lock() {

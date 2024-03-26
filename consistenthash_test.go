@@ -3,6 +3,7 @@ package consistenthash
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"testing"
 )
@@ -164,21 +165,12 @@ func TestConsistency(t *testing.T) {
 
 }
 
-func BenchmarkGet8x50(b *testing.B)      { benchmarkGet(b, 8, false, 0) }
-func BenchmarkGet512x50(b *testing.B)    { benchmarkGet(b, 512, false, 0) }
-func BenchmarkGet1024x50(b *testing.B)   { benchmarkGet(b, 1024, false, 0) }
-func BenchmarkGet4096x50(b *testing.B)   { benchmarkGet(b, 4096, false, 0) }
-func BenchmarkGet200000x50(b *testing.B) { benchmarkGet(b, 200000, false, 0) }
-func BenchmarkAdd8x50(b *testing.B)      { benchmarkAdd(b, 8, false, 0) }
-func BenchmarkAddBulk8x50(b *testing.B)  { benchmarkBulkAdd(b, 8, false, 0) }
-func BenchmarkRemove128x50(b *testing.B) { benchmarkRemove(b, 128, false, 0) }
-
 func BenchmarkGet8BPx50(b *testing.B)      { benchmarkGet(b, 8, false, 5) }
 func BenchmarkGet512BPx50(b *testing.B)    { benchmarkGet(b, 512, false, 5) }
 func BenchmarkGet1024BPx50(b *testing.B)   { benchmarkGet(b, 1024, false, 5) }
 func BenchmarkGet4096BPx50(b *testing.B)   { benchmarkGet(b, 4096, false, 5) }
 func BenchmarkGet200000BPx50(b *testing.B) { benchmarkGet(b, 200000, false, 5) }
-func BenchmarkAdd8BPx50(b *testing.B)      { benchmarkAdd(b, 8, false, 5) }
+func BenchmarkAdd8BPx50(b *testing.B)      { benchmarkAdd(b, 8, false, 15) }
 func BenchmarkAddBulk8BPx50(b *testing.B)  { benchmarkBulkAdd(b, 8, false, 5) }
 func BenchmarkRemove128BPx50(b *testing.B) { benchmarkRemove(b, 128, false, 5) }
 
@@ -274,8 +266,10 @@ func benchmarkGet(b *testing.B, shards int, readLockFree bool, blockPartitionDiv
 	hash.Add(buckets...)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		hash.Get(lookups[i%(shards-1)])
-	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			hash.Get(lookups[rand.Intn(shards-1)])
+		}
+	})
 	//b.Logf("metrics: %+v", hash.Metrics())
 }

@@ -165,21 +165,21 @@ func TestConsistency(t *testing.T) {
 
 }
 
-func BenchmarkGet8BPx50(b *testing.B)      { benchmarkGet(b, 8, false, 5) }
-func BenchmarkGet512BPx50(b *testing.B)    { benchmarkGet(b, 512, false, 5) }
-func BenchmarkGet1024BPx50(b *testing.B)   { benchmarkGet(b, 1024, false, 5) }
-func BenchmarkGet4096BPx50(b *testing.B)   { benchmarkGet(b, 4096, false, 5) }
-func BenchmarkGet200000BPx50(b *testing.B) { benchmarkGet(b, 200000, false, 5) }
-func BenchmarkAdd8BPx50(b *testing.B)      { benchmarkAdd(b, 8, false, 15) }
-func BenchmarkAddBulk8BPx50(b *testing.B)  { benchmarkBulkAdd(b, 8, false, 5) }
-func BenchmarkRemove128BPx50(b *testing.B) { benchmarkRemove(b, 128, false, 5) }
+func BenchmarkGet8x50(b *testing.B)      { benchmarkGet(b, 8, 5) }
+func BenchmarkGet512x50(b *testing.B)    { benchmarkGet(b, 512, 5) }
+func BenchmarkGet1024x50(b *testing.B)   { benchmarkGet(b, 1024, 5) }
+func BenchmarkGet4096x50(b *testing.B)   { benchmarkGet(b, 4096, 5) }
+func BenchmarkGet200000x50(b *testing.B) { benchmarkGet(b, 200000, 5) }
+func BenchmarkAdd8x50(b *testing.B)      { benchmarkAdd(b, 8, 100) }
+func BenchmarkAddBulk8x50(b *testing.B)  { benchmarkBulkAdd(b, 8, 5) }
+func BenchmarkRemove128x50(b *testing.B) { benchmarkRemove(b, 128, 5) }
 
-func BenchmarkStringGet8x50(b *testing.B)   { benchmarkGetString(b, 8, false) }
-func BenchmarkStringGet512x50(b *testing.B) { benchmarkGetString(b, 512, false) }
+func BenchmarkStringGet8x50(b *testing.B)   { benchmarkGetString(b, 8) }
+func BenchmarkStringGet512x50(b *testing.B) { benchmarkGetString(b, 512) }
 
-func benchmarkGetString(b *testing.B, shards int, readLockFree bool) {
+func benchmarkGetString(b *testing.B, shards int) {
 
-	hash := New(WithDefaultReplicas(50), WithReadLockFree(readLockFree))
+	hash := New(WithDefaultReplicas(50))
 
 	var buckets []string
 	var lookups []string
@@ -195,11 +195,10 @@ func benchmarkGetString(b *testing.B, shards int, readLockFree bool) {
 	}
 }
 
-func benchmarkBulkAdd(b *testing.B, shards int, readLockFree bool, blockPartitionDivision int) {
+func benchmarkBulkAdd(b *testing.B, shards int, blockPartitionDivision int) {
 
 	hash := New(
 		WithDefaultReplicas(50),
-		WithReadLockFree(readLockFree),
 		WithBlockPartitioning(blockPartitionDivision),
 	)
 	var buckets [][]byte
@@ -212,12 +211,12 @@ func benchmarkBulkAdd(b *testing.B, shards int, readLockFree bool, blockPartitio
 	}
 }
 
-func benchmarkAdd(b *testing.B, shards int, readLockFree bool, blockPartitionDivision int) {
+func benchmarkAdd(b *testing.B, shards int, blockPartitionDivision int) {
 
 	hash := New(
 		WithDefaultReplicas(50*uint(shards)),
-		WithReadLockFree(readLockFree),
 		WithBlockPartitioning(blockPartitionDivision),
+		WithMetrics(),
 	)
 	var buckets [][]byte
 	for i := 0; i < b.N; i++ {
@@ -227,13 +226,13 @@ func benchmarkAdd(b *testing.B, shards int, readLockFree bool, blockPartitionDiv
 	for i := 0; i < b.N; i++ {
 		hash.Add(buckets[i])
 	}
+	b.Logf("metrics: %+v", hash.Metrics())
 }
 
-func benchmarkRemove(b *testing.B, shards int, readLockFree bool, blockPartitionDivision int) {
+func benchmarkRemove(b *testing.B, shards int, blockPartitionDivision int) {
 
 	hash := New(
 		WithDefaultReplicas(50),
-		WithReadLockFree(readLockFree),
 		WithBlockPartitioning(blockPartitionDivision),
 	)
 	var buckets [][]byte
@@ -248,12 +247,11 @@ func benchmarkRemove(b *testing.B, shards int, readLockFree bool, blockPartition
 	}
 }
 
-func benchmarkGet(b *testing.B, shards int, readLockFree bool, blockPartitionDivision int) {
+func benchmarkGet(b *testing.B, shards int, blockPartitionDivision int) {
 	hash := New(
 		WithDefaultReplicas(50),
-		WithReadLockFree(readLockFree),
 		WithBlockPartitioning(blockPartitionDivision),
-		//WithMetrics(),
+		WithMetrics(),
 	)
 	var lookups [][]byte
 	var buckets [][]byte
@@ -271,5 +269,27 @@ func benchmarkGet(b *testing.B, shards int, readLockFree bool, blockPartitionDiv
 			hash.Get(lookups[rand.Intn(shards-1)])
 		}
 	})
+	b.Logf("metrics: %+v", hash.Metrics())
+}
+
+func benchmarkAddGet(b *testing.B, shards int, blockPartitionDivision int) {
+	hash := New(
+		WithDefaultReplicas(50),
+		WithBlockPartitioning(blockPartitionDivision),
+		//WithMetrics(),
+	)
+	var lookups [][]byte
+	var buckets [][]byte
+	for i := 0; i <= shards*50; i++ {
+		var str bytes.Buffer
+		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
+		str.WriteString(fmt.Sprintf("shard-x-%d", i))
+		lookups = append(lookups, str.Bytes())
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		hash.Add(buckets[rand.Intn(shards*50-1)])
+		hash.Get(lookups[rand.Intn(shards*50-1)])
+	}
 	//b.Logf("metrics: %+v", hash.Metrics())
 }

@@ -20,6 +20,7 @@ type node struct {
 // ConsistentHash everything we need for CH
 type ConsistentHash struct {
 	mu                sync.RWMutex
+	metricsmu         sync.Mutex
 	hash              HashFunc
 	replicas          uint              // default number of replicas in hash ring (higher number means more possibility for balance equality)
 	hTable            map[uint32][]byte // Hash table key value pair (hash(x): x) * replicas (nodes)
@@ -68,11 +69,16 @@ func New(opts ...Option) *ConsistentHash {
 
 // Metrics return the collected metrics
 func (ch *ConsistentHash) Metrics() any {
+	ch.metricsmu.Lock()
+	defer ch.metricsmu.Unlock()
+
 	// block size distribution
 	ch.metrics["blockSize"] = make(map[int]int, 0)
 	for _, nodes := range ch.blocks {
 		ch.metrics["blockSize"][len(nodes)]++
 	}
+	ch.metrics["totalKeys"] = map[int]int{0: int(ch.totalKeys)}
+	ch.metrics["totalBlocks"] = map[int]int{0: int(ch.totalBlocks)}
 	return ch.metrics
 }
 
@@ -83,8 +89,8 @@ func (ch *ConsistentHash) IsEmpty() bool {
 
 // Add adds some keys to the hash
 func (ch *ConsistentHash) Add(keys ...[]byte) {
-	ch.lock()
-	defer ch.unlock()
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 	ch.add(ch.replicas, keys...)
 }
 
@@ -93,8 +99,8 @@ func (ch *ConsistentHash) AddReplicas(replicas uint, keys ...[]byte) {
 	if replicas < 1 {
 		return
 	}
-	ch.lock()
-	defer ch.unlock()
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 	ch.add(replicas, keys...)
 }
 
@@ -104,10 +110,10 @@ func (ch *ConsistentHash) Get(key []byte) []byte {
 		return nil
 	}
 
-	ch.rLock()
-	defer ch.rUnlock()
-
 	hash := ch.hash(key)
+
+	ch.mu.RLock()
+	defer ch.mu.RUnlock()
 
 	// check if the exact match exist in the hash table
 	if v, ok := ch.hTable[hash]; ok {
@@ -131,10 +137,11 @@ func (ch *ConsistentHash) Remove(key []byte) bool {
 	if ch.IsEmpty() {
 		return true
 	}
-	ch.lock()
-	defer ch.unlock()
 
 	originalHash := ch.hash(key)
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
 
 	replicas, found := ch.rTable[originalHash]
 	if !found {
@@ -197,8 +204,8 @@ func (ch *ConsistentHash) addNodes(nodes []node) {
 		return nodes[i].key < nodes[j].key
 	})
 
-	totalBlocks := (ch.totalKeys + uint32(len(nodes))) / ch.blockPartitioning
-	ch.balanceBlocks(totalBlocks)
+	expectedBlocks := (ch.totalKeys + uint32(len(nodes))) / ch.blockPartitioning
+	ch.balanceBlocks(expectedBlocks)
 	for i := range nodes {
 		ch.addNode(nodes[i])
 	}
@@ -214,8 +221,14 @@ func (ch *ConsistentHash) addNode(n node) {
 		return
 	}
 	idx := sort.Search(len(nodes), func(i int) bool {
-		return nodes[i].key > n.key
+		return nodes[i].key >= n.key
 	})
+
+	// check for duplication, ignore if it's duplicate
+	if idx < len(nodes) && nodes[idx].key == n.key {
+		return
+	}
+
 	ch.blocks[blockNumber] = append(
 		ch.blocks[blockNumber][:idx],
 		append([]node{n}, ch.blocks[blockNumber][idx:]...)...,
@@ -223,28 +236,42 @@ func (ch *ConsistentHash) addNode(n node) {
 	ch.totalKeys++
 }
 
-// balanceBlocks checks all the keys in each block and move those to the next block if the number of blocks needs to be changed
-func (ch *ConsistentHash) balanceBlocks(totalBlocks uint32) {
-	// increasing the number of blocks
-	if totalBlocks > ch.totalBlocks {
-		blockSize := math.MaxUint32 / totalBlocks
-		//offset := 0
-		for blockNumber := uint32(0); blockNumber < totalBlocks-1; blockNumber++ {
-			for i := 0; i < len(ch.blocks[blockNumber]); i++ {
-				// the first item not in the block so the next items will not be in the block as well
-				if ch.blocks[blockNumber][i].key/blockSize != blockNumber {
-					// prepend items to the next block
-					ch.blocks[blockNumber+1] = append(ch.blocks[blockNumber][i:], ch.blocks[blockNumber+1]...)
-					// remove items from current block
-					ch.blocks[blockNumber] = ch.blocks[blockNumber][:i][:len(ch.blocks[blockNumber][:i]):len(ch.blocks[blockNumber][:i])]
-					break
+// balanceBlocks checks all the keys in each block and shifts to the next block if the number of blocks needs to be changed
+func (ch *ConsistentHash) balanceBlocks(expectedBlocks uint32) {
+	// re-balance the blocks if expectedBlocks needs twice size as it's current size
+	if (expectedBlocks >> 1) > ch.totalBlocks {
+		ch.metricRebalanced(expectedBlocks)
+		blockSize := math.MaxUint32 / expectedBlocks
+		for blockNumber := uint32(0); blockNumber < expectedBlocks-1; blockNumber++ {
+			nodes := ch.blocks[blockNumber]
+			targetBlock := blockNumber
+			var j int
+			for i := 0; i < len(nodes); i++ {
+				// the first item not in the block, so the next items will not be in the block as well
+				if nodes[i].key/blockSize == targetBlock {
+					continue
+				}
+				if targetBlock == blockNumber {
+					// update current block items
+					ch.blocks[blockNumber] = nodes[:i][:i:i]
+				}
+
+				targetBlock++
+				for j = i; j < len(nodes); j++ {
+					if nodes[j].key/blockSize != targetBlock {
+						break
+					}
+				}
+				if i != j {
+					ch.blocks[targetBlock] = append(nodes[i:j], ch.blocks[targetBlock]...)
+					i = j
 				}
 			}
 		}
 
-		ch.totalBlocks = totalBlocks
-	} else if totalBlocks < ch.totalBlocks {
-		// TODO decrease number of blocks
+		ch.totalBlocks = expectedBlocks
+	} else if expectedBlocks < (ch.totalBlocks >> 1) {
+		// TODO decrease number of blocks to avoid missed blocks
 	}
 
 	if ch.totalBlocks < 1 {
@@ -288,7 +315,7 @@ func (ch *ConsistentHash) lookupFromBlock(hash uint32) ([]byte, uint32) {
 		if !ok {
 			blockNumber++
 			if ch.metrics != nil {
-				ch.storeMissed(i)
+				ch.metricMissed(i)
 				i++
 			}
 			continue
@@ -319,29 +346,31 @@ func (ch *ConsistentHash) lookupFromBlock(hash uint32) ([]byte, uint32) {
 	return nil, blockNumber
 }
 
-// storeMissed collect number of missed blocks for debugging
-func (ch *ConsistentHash) storeMissed(i int) {
+// metricMissed collect number of missed blocks for debugging
+func (ch *ConsistentHash) metricMissed(i int) {
 	if ch.metrics == nil {
 		return
 	}
+
+	ch.metricsmu.Lock()
+	defer ch.metricsmu.Unlock()
+
 	if ch.metrics["missed"] == nil {
 		ch.metrics["missed"] = make(map[int]int, 0)
 	}
 	ch.metrics["missed"][i]++
 }
 
-func (ch *ConsistentHash) lock() {
-	ch.mu.Lock()
-}
+// metricRebalanced collect number of re-balancing blocks for debugging
+func (ch *ConsistentHash) metricRebalanced(expectedBlocks uint32) {
+	if ch.metrics == nil {
+		return
+	}
 
-func (ch *ConsistentHash) unlock() {
-	ch.mu.Unlock()
-}
-
-func (ch *ConsistentHash) rLock() {
-	ch.mu.RLock()
-}
-
-func (ch *ConsistentHash) rUnlock() {
-	ch.mu.RUnlock()
+	ch.metricsmu.Lock()
+	defer ch.metricsmu.Unlock()
+	if ch.metrics["re-balance"] == nil {
+		ch.metrics["re-balance"] = make(map[int]int, 0)
+	}
+	ch.metrics["re-balance"][len(ch.metrics["re-balance"])] = int(expectedBlocks)
 }

@@ -120,7 +120,7 @@ func (ch *ConsistentHash) Get(key []byte) []byte {
 		return v
 	}
 
-	v, _ := ch.lookupFromBlock(hash)
+	v, _ := ch.lookup(hash)
 	return v
 }
 
@@ -288,7 +288,7 @@ func (ch *ConsistentHash) removeFromBlock(hash, originalHash uint32) {
 		return
 	}
 
-	// TODO efficient way would be too use ch.lookupFromBlock(hash uint32)
+	// TODO efficient way would be to use ch.lookup(hash uint32)
 	for i := range ch.blocks[blockNumber] {
 		if ch.blocks[blockNumber][i].key == hash {
 			ch.blocks[blockNumber] = append(ch.blocks[blockNumber][:i], ch.blocks[blockNumber][i+1:]...) // remove item
@@ -302,8 +302,8 @@ func (ch *ConsistentHash) removeFromBlock(hash, originalHash uint32) {
 	return
 }
 
-// lookupFromBlock finds the block number and index of the given hash
-func (ch *ConsistentHash) lookupFromBlock(hash uint32) ([]byte, uint32) {
+// lookup finds the block number and value of the given hash
+func (ch *ConsistentHash) lookup(hash uint32) ([]byte, uint32) {
 	// block size is equal to hkeys
 	// binary search for appropriate replica
 	blockSize := math.MaxUint32 / ch.totalBlocks
@@ -320,10 +320,12 @@ func (ch *ConsistentHash) lookupFromBlock(hash uint32) ([]byte, uint32) {
 			}
 			continue
 		}
+		// binary search inside the block
 		idx = sort.Search(len(nodes), func(i int) bool {
 			return nodes[i].key >= hash
 		})
 
+		// if not found in the block, the first item from the next block is the answer
 		if idx == len(nodes) {
 			if blockNumber == ch.totalBlocks-1 && !fullCircle {
 				// go to the first block
@@ -338,10 +340,20 @@ func (ch *ConsistentHash) lookupFromBlock(hash uint32) ([]byte, uint32) {
 		return ch.hTable[nodes[idx].pointer], blockNumber
 	}
 
-	if blockNumber == ch.totalBlocks && len(ch.blocks[0]) > 0 {
-		blockNumber = 0
-		firstKey := ch.blocks[0][0].pointer
-		return ch.hTable[firstKey], blockNumber
+	// if we reach the last block, we need to find the first block that has an item
+	if blockNumber == ch.totalBlocks {
+		var j uint32
+		for j < uint32(len(ch.blocks)) {
+			if len(ch.blocks[j]) > 0 {
+				blockNumber = 0
+				firstKey := ch.blocks[0][0].pointer
+				return ch.hTable[firstKey], blockNumber
+			}
+			if ch.metrics != nil {
+				ch.metricMissed(int(j))
+			}
+			j++
+		}
 	}
 	return nil, blockNumber
 }

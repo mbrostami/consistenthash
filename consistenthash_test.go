@@ -165,14 +165,14 @@ func TestConsistency(t *testing.T) {
 
 }
 
-func BenchmarkGet8x50(b *testing.B)      { benchmarkGet(b, 8, 5) }
-func BenchmarkGet512x50(b *testing.B)    { benchmarkGet(b, 512, 5) }
-func BenchmarkGet1024x50(b *testing.B)   { benchmarkGet(b, 1024, 5) }
-func BenchmarkGet4096x50(b *testing.B)   { benchmarkGet(b, 4096, 5) }
-func BenchmarkGet200000x50(b *testing.B) { benchmarkGet(b, 200000, 5) }
-func BenchmarkAdd8x50(b *testing.B)      { benchmarkAdd(b, 8, 100) }
-func BenchmarkAddBulk8x50(b *testing.B)  { benchmarkBulkAdd(b, 8, 5) }
-func BenchmarkRemove128x50(b *testing.B) { benchmarkRemove(b, 128, 5) }
+func BenchmarkGet8x50(b *testing.B)      { benchmarkGet(b, 8, 5, false) }
+func BenchmarkGet512x50(b *testing.B)    { benchmarkGet(b, 512, 5, false) }
+func BenchmarkGet1024x50(b *testing.B)   { benchmarkGet(b, 1024, 5, false) }
+func BenchmarkGet4096x50(b *testing.B)   { benchmarkGet(b, 4096, 5, false) }
+func BenchmarkGet200000x50(b *testing.B) { benchmarkGet(b, 200000, 5, false) }
+func BenchmarkAdd8x50(b *testing.B)      { benchmarkAdd(b, 8, 100, false) }
+func BenchmarkAddBulk8x50(b *testing.B)  { benchmarkBulkAdd(b, 8, 5, false) }
+func BenchmarkRemove128x50(b *testing.B) { benchmarkRemove(b, 128, 5, false) }
 
 func BenchmarkStringGet8x50(b *testing.B)   { benchmarkGetString(b, 8) }
 func BenchmarkStringGet512x50(b *testing.B) { benchmarkGetString(b, 512) }
@@ -195,11 +195,12 @@ func benchmarkGetString(b *testing.B, shards int) {
 	}
 }
 
-func benchmarkBulkAdd(b *testing.B, shards int, blockPartitionDivision int) {
+func benchmarkBulkAdd(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
 
 	hash := New(
 		WithDefaultReplicas(50),
 		WithBlockPartitioning(blockPartitionDivision),
+		WithMetrics(showMetrics),
 	)
 	var buckets [][]byte
 	for i := 0; i <= shards; i++ {
@@ -209,14 +210,17 @@ func benchmarkBulkAdd(b *testing.B, shards int, blockPartitionDivision int) {
 	for i := 0; i < b.N; i++ {
 		hash.Add(buckets...)
 	}
+	if showMetrics {
+		b.Logf("metrics: %+v", hash.Metrics())
+	}
 }
 
-func benchmarkAdd(b *testing.B, shards int, blockPartitionDivision int) {
+func benchmarkAdd(b *testing.B, shards, blockPartitionDivision int, showMetrics bool) {
 
 	hash := New(
 		WithDefaultReplicas(50*uint(shards)),
 		WithBlockPartitioning(blockPartitionDivision),
-		WithMetrics(),
+		WithMetrics(showMetrics),
 	)
 	var buckets [][]byte
 	for i := 0; i < b.N; i++ {
@@ -226,14 +230,17 @@ func benchmarkAdd(b *testing.B, shards int, blockPartitionDivision int) {
 	for i := 0; i < b.N; i++ {
 		hash.Add(buckets[i])
 	}
-	b.Logf("metrics: %+v", hash.Metrics())
+	if showMetrics {
+		b.Logf("metrics: %+v", hash.Metrics())
+	}
 }
 
-func benchmarkRemove(b *testing.B, shards int, blockPartitionDivision int) {
+func benchmarkRemove(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
 
 	hash := New(
 		WithDefaultReplicas(50),
 		WithBlockPartitioning(blockPartitionDivision),
+		WithMetrics(showMetrics),
 	)
 	var buckets [][]byte
 	for i := 0; i <= shards; i++ {
@@ -245,13 +252,16 @@ func benchmarkRemove(b *testing.B, shards int, blockPartitionDivision int) {
 	for i := 0; i < b.N; i++ {
 		hash.Remove(buckets[i%(shards-1)])
 	}
+	if showMetrics {
+		b.Logf("metrics: %+v", hash.Metrics())
+	}
 }
 
-func benchmarkGet(b *testing.B, shards int, blockPartitionDivision int) {
+func benchmarkGet(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
 	hash := New(
 		WithDefaultReplicas(50),
 		WithBlockPartitioning(blockPartitionDivision),
-		WithMetrics(),
+		WithMetrics(showMetrics),
 	)
 	var lookups [][]byte
 	var buckets [][]byte
@@ -269,14 +279,16 @@ func benchmarkGet(b *testing.B, shards int, blockPartitionDivision int) {
 			hash.Get(lookups[rand.Intn(shards-1)])
 		}
 	})
-	b.Logf("metrics: %+v", hash.Metrics())
+	if showMetrics {
+		b.Logf("metrics: %+v", hash.Metrics())
+	}
 }
 
-func benchmarkAddGet(b *testing.B, shards int, blockPartitionDivision int) {
+func benchmarkAddGet(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
 	hash := New(
 		WithDefaultReplicas(50),
 		WithBlockPartitioning(blockPartitionDivision),
-		//WithMetrics(),
+		WithMetrics(showMetrics),
 	)
 	var lookups [][]byte
 	var buckets [][]byte
@@ -291,5 +303,7 @@ func benchmarkAddGet(b *testing.B, shards int, blockPartitionDivision int) {
 		hash.Add(buckets[rand.Intn(shards*50-1)])
 		hash.Get(lookups[rand.Intn(shards*50-1)])
 	}
-	//b.Logf("metrics: %+v", hash.Metrics())
+	if showMetrics {
+		b.Logf("metrics: %+v", hash.Metrics())
+	}
 }

@@ -2,11 +2,9 @@ package consistenthash
 
 type options struct {
 	hashFunc          HashFunc
-	initialRingSize   int
 	defaultReplicas   uint
 	blockPartitioning int
 	metrics           bool
-	readLockFree      bool
 }
 
 type Option func(*options)
@@ -34,8 +32,8 @@ func WithBlockPartitioning(divisionBy int) Option {
 
 // WithMetrics enables collecting metrics for block partitioning
 // using metrics is not thread safe, and needs to be used only for test and debugging
-func WithMetrics() Option {
+func WithMetrics(showMetrics bool) Option {
 	return func(o *options) {
-		o.metrics = true
+		o.metrics = showMetrics
 	}
 }

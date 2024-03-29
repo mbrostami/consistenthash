@@ -12,122 +12,87 @@ This package is implemented based on [golang/groupcache](https://github.com/gola
 - int hashes replaced with uint32
 - Number of replicas is now configurable while adding new node (useful when capacity is not the same for all nodes)
 
-# Addition to the original algorithm
-To make lookups faster, I used the number of registered keys divided by a number (d) in hash ring to create a fixed size of blocks (Block Partitioning) that covers the whole ring.  
-Each block consist of zero/multiple sorted keys that are also exist in hash ring, during the lookup, the block number will be calculated with time complexity as O(1).  
-Then a binary search will be applied on the keys in that block and index of the key will be returned.   
-If the distribution of the hashed keys is roughly uniform, (The more uniform the distribution, the more effective and predictable the performance)       
-it means in each block we should expect ~1 key when d = 1, which should end up to: `O(log(n)) >= time complexity >= O(1)` or `O(log(k))` where `k` is the maximum number of elements in the largest block.   
-The drawback would be slightly slower writes.       
+# Technical Details:
+A **HashMap** that maps the hash of the key to the original values, something like `0xFF => "node number one"`  
 
-### Lookup benchmarks:
-**WITHOUT** block partitioning:   
+A **BlockMap** that has dynamic number of blocks and each block has sorted list of items, and each item has Key and Pointer to the HashMap. The block number is calculated as:   
+`blockNumber = hash(key) / (MaxUint32 / number of blocks)`  
+This will lead us to have a kind of sorted blocks.  
+
+A **ReplicaMap** that keeps the number of replicas for each key ONLY if the replicas for specific key is different than the default replicas. So if you have 10k keys with default replica set to 100 and you add a new key with 120 replicas, the ReplicaMap will have 1 record.
+
+### Re-Balancing:
+To add a new record we need to know how many blocks we should have. Considering current number of keys and a control option D we will have number of keys divided by D as number of expected blocks.  
+
+As the result will change by adding D number of new keys we will need a re-balancing mechanism to add or remove blocks. To make it efficient we can start re-balancing if the expected blocks is twice more or less than current number of blocks.  
+
+**As an example**:  
+If we have D = 200 with 100k existing keys, there will be 1000 blocks each contains approximately 500 keys. Adding 200 new keys will require us to have 1001 blocks. So expected blocks is 1001 but current is 1000. As we add more keys the expected blocks becomes 2001 and current remains 1000. In this case re-balancing process starts and adds 1001 more blocks. As a result we will have 2001 blocks. Next re-balancing will happen when we need 4002 blocks and so on.  
+
+This process happens as follows:  
+Looping over blocks from the last one. Looping over items in each block starting from end, calculating the new block number for each key. Because items are sorted, as we reach to a key that doesn't belong to a different block, we shift items to the target block.  
+Here is an example:  
 ```
-BenchmarkGet8x50-10                 1000                65.0 ns/op             0 B/op          0 allocs/op
-BenchmarkGet512x50-10               1000               164.4 ns/op             0 B/op          0 allocs/op
-BenchmarkGet1024x50-10              1000               348.6 ns/op             0 B/op          0 allocs/op
-BenchmarkGet4096x50-10              1000               385.4 ns/op             0 B/op          0 allocs/op
-BenchmarkGet200000x50-10            1000              1476.0 ns/op             0 B/op          0 allocs/op
+max hash value = 1000
+total keys = 100
+D = 5
+blockSize = 1000 / (100/5) = 50
+blockNumber = hash / blockSize
+Number of blocks: 1000 / blockSize = 20
+10  / 50 => 0
+20  / 50 => 0
+50  / 50 => 1
+...
+1000 / 50 => 20
+
+Block[0]  = [10,20,30,40]
+Block[1]  = [50,60,70,80]
+Block[4]  = [210,220,230,240]
+...
+
+Re-balancing:
+newBlockSize = 1000/ (200/5) = 25
+newBlockNumber = hash / newBlockSize
+Expected blocks: 1000 / newBlockSize = 40
+iter b20: // starting from last block
+...
+iter b4:
+Block[0]  = [10,20,30,40]
+Block[1]  = [50,60,70,80]
+Block[8]  = [210,220]  // moved from block[4]
+Block[9]  = [230,240]  // moved from block[4]
+itr b1:
+Block[0]  = [10,20,30,40]
+Block[2]  = [50,60,70] // moved from block[1]
+Block[3]  = [80]       // moved from block[1]
+Block[8]  = [210,220]  // moved from block[4]
+Block[9]  = [230,240]  // moved from block[4]
+itr b0:
+Block[0]  = [10,20]
+Block[1]  = [30,40].   // moved from block[0]
+Block[2]  = [50,60,70] // moved from block[1]
+Block[3]  = [80]       // moved from block[1]
+Block[8]  = [210,220]  // moved from block[4]
+Block[9]  = [230,240]  // moved from block[4]
 ```
+Time complexity of the above would be O(n) in worst case where n is the number of keys.  
+You can set D value by passing an option to constructor: `WithBlockPartitioning(5)`  
 
-**WITH** block partitioning with size of total keys / 5:   
-```
-BenchmarkGet8BPx50-10               1000                33.4 ns/op             0 B/op          0 allocs/op
-BenchmarkGet512BPx50-10             1000               103.9 ns/op             0 B/op          0 allocs/op
-BenchmarkGet1024BPx50-10            1000               135.2 ns/op             0 B/op          0 allocs/op
-BenchmarkGet4096BPx50-10            1000               229.0 ns/op             0 B/op          0 allocs/op
-BenchmarkGet200000BPx50-10          1000               343.5 ns/op             0 B/op          0 allocs/op
-```
+### Adding Item:
+Time Complexity is between O(1) and O(log k) where k is the maximum number of keys in a block. (excluding shifting items)
 
-### Block Partitioning Distribution 
-#### Explanation
-Before running into the experiment consider an example where you have 10 keys:   
-If you have 1 block per key, so 10 blocks, means you MIGHT have 1 key in each block but that's not always the case, you may have a block with 2 keys and one with no keys.   
-So we need to skip the block that doesn't have any key in it and jump to the next block. Let's call this `Missed blocks`.  
+To add a new item to a block, we need to calculate the block number and do a binary search to find the position where we want to insert the item, and update the list in that block. If the item is the original node, we need to add the key and value to the HashMap as well. All the items in the block (including replicas) will use the pointer to the HashMap.  
 
-#### Key Distribution (block size):
-For 4096x50 = 204k added keys with avg 5 keys in each block we will have around 40k blocks with following distribution:    
-```
-[1:2578 2:5583 3:7070 4:5692 5:4270 6:3477 7:3291 8:2733 9:2098 10:1578 11:1094 12:629 13:290 14:98 15:30 16:8 17:3]
-```
-2578 blocks with 1 key  
-5583 blocks with 2 keys  
-7070 blocks with 3 keys  
-5692 blocks with 4 keys  
-4270 blocks with 5 keys  
-3477 blocks with 6 keys  
-3291 blocks with 7 keys  
-2733 blocks with 8 keys  
-...  
-3 blocks with 17 keys  
+### Removing Item:
+Time Complexity is between O(1) and O(log k) where k is the maximum number of keys in a block. (excluding shifting items) 
 
+To remove an item, we find the block number using hash of the key, doing a binary search in the block, finding removing the item in the block. The re-balancing might be necessary if we remove 1/2 of all the stored keys.  
 
-#### Experiment Missed Blocks:  
-Let's have 10M keys added to the ring hash with `crc32.ChecksumIEEE` as hash function. I used `WithMetrics()` to collect the metrics for missed blocks.  
+### Lookup:
+Time Complexity is between O(1) and O(log k) where k is the maximum number of keys in a block.  
 
-1. To have 1 block per key (10M blocks) I used `WithBlockPartitioning(1)` option.
-   Here is the missed blocks for 10k random lookups:  
-    ```
-    [0:3746 1:1503 2:753 3:437 4:230 5:106 6:50 7:24 8:10 9:6 10:3 11:1 12:1]
-    
-    Where:
-     
-    3746 lookups jumped to the second block which:
-    1503 of those lookups jumped to the third block which:
-    753  of those lookups jumped to the fourth block which:
-    ...
-    1 of those lookups jumped to 13th block
-    ```     
+To find a key, we find the block number using hash of the key, doing a binary search to find the closest hash to the lookup key. You might go to the next non-empty block and get the first item.  
 
-2. To have 1 block for each 5 keys (2M blocks) I used `WithBlockPartitioning(5)` option.
-   Here is the missed blocks for 10k random lookups:
-    ```
-    [0:236 1:5]
-    
-    Where:
-     
-    236 lookups jumped to the second block which: 
-    5 of those lookups jumped to the third block
-    ```     
-3. To have 1 block for each 10 keys (1M blocks) I used `WithBlockPartitioning(10)` option.
-   Here is the missed blocks for 10k random lookups:
-    ```
-    [0:5]
-    
-    Where:
-     
-    5 lookups jumped to the second block
-    ```     
-
-
-# Benchmark
-Each numbers in front of the benchmark name specifies how many keys (x50 replicas) will be added to the ring, so 4096 means (4096 * 50) keys.  
-`BenchmarkGet8x50` adds 8*50 keys to the ring, with no block partitioning.  
-`BenchmarkGet8BPx50` adds 8*50 keys to the ring, with block partitioning with size of: (total keys / 5)
-```bash
-> go test ./... -run none -bench Benchmark -benchtime 1000x -benchmem                                                                                                                                                                                                                                                                                                                                                        ─╯
-goos: darwin
-goarch: arm64
-pkg: github.com/mbrostami/consistenthash/v2
-
-BenchmarkGet8x50-10                 1000                65.0 ns/op             0 B/op          0 allocs/op
-BenchmarkGet512x50-10               1000               164.4 ns/op             0 B/op          0 allocs/op
-BenchmarkGet1024x50-10              1000               348.6 ns/op             0 B/op          0 allocs/op
-BenchmarkGet4096x50-10              1000               385.4 ns/op             0 B/op          0 allocs/op
-BenchmarkGet200000x50-10            1000             23234.0 ns/op             0 B/op          0 allocs/op
-BenchmarkAdd8x50-10                 1000          26563219.0 ns/op         78102 B/op         16 allocs/op
-BenchmarkRemove128x50-10            1000             10888.0 ns/op          3200 B/op         50 allocs/op
-
-BenchmarkGet8BPx50-10               1000                33.4 ns/op             0 B/op          0 allocs/op
-BenchmarkGet512BPx50-10             1000               103.9 ns/op             0 B/op          0 allocs/op
-BenchmarkGet1024BPx50-10            1000               135.2 ns/op             0 B/op          0 allocs/op
-BenchmarkGet4096BPx50-10            1000               229.0 ns/op             0 B/op          0 allocs/op
-BenchmarkGet200000BPx50-10          1000               343.5 ns/op             0 B/op          0 allocs/op
-BenchmarkAdd8BPx50-10               1000          29747129.0 ns/op         82258 B/op         18 allocs/op
-BenchmarkRemove128BPx50-10          1000             22609.0 ns/op          6736 B/op         54 allocs/op
-
-
-```
 # Usage
 
 `go get github.com/mbrostami/consistenthash/v2`
@@ -145,9 +110,9 @@ import (
 func main() {
 
 	ch := consistenthash.New(consistenthash.WithDefaultReplicas(10))
-	ch.Add("templateA", "templateB")
+	ch.Add([]byte("templateA"), []byte("templateB"))
 
-	assignedTemplate := ch.Get("userA") // assigned template should always be the same for `userA`
+	assignedTemplate := ch.Get([]byte("userA")) // assigned template should always be the same for `userA`
 	fmt.Printf("assigned: %s", assignedTemplate)
 }
 ```
@@ -166,11 +131,11 @@ import (
 
 func main() {
 	ch := consistenthash.New(consistenthash.WithDefaultReplicas(10))
-	ch.Add("127.0.0.1:1001", "127.0.0.1:1002")
-	ch.AddReplicas(40, "127.0.0.1:1003") // 4x more weight
+	ch.Add([]byte("127.0.0.1:1001"), []byte("127.0.0.1:1002"))
+	ch.AddReplicas(40, []byte("127.0.0.1:1003")) // 4x more weight
 
 	rKey := "something like request url or user id"
-	node := ch.Get(rKey) // find upper closest node
+	node := ch.Get([]byte(rKey)) // find upper closest node
 	fmt.Println(node) // this will print out one of the nodes
 }
 
@@ -190,14 +155,15 @@ import (
 	"github.com/mbrostami/consistenthash/v2"
 )
 
+
 func main() {
 	ch := consistenthash.New(consistenthash.WithDefaultReplicas(3))
-	ch.Add("A", "B", "C")
+	ch.Add([]byte("A"), []byte("B"), []byte("C"))
 
-	fmt.Println(ch.Get("Alica")) 
-	fmt.Println(ch.Get("Bob")) 
-	fmt.Println(ch.Get("Casey")) 
-	
+	fmt.Println(ch.Get([]byte("Alica")))
+	fmt.Println(ch.Get([]byte("Bob")))
+	fmt.Println(ch.Get([]byte("Casey")))
+
 }
 
 ```

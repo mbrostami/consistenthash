@@ -1,11 +1,7 @@
 package consistenthash
 
 import (
-	"bytes"
-	"fmt"
-	"math/rand"
 	"strconv"
-	"sync"
 	"testing"
 )
 
@@ -165,135 +161,10 @@ func TestConsistency(t *testing.T) {
 	}
 
 }
-func BenchmarkConcurrent(b *testing.B) { benchmarkConcurrent(b, 10000, 5, false) }
 
-func BenchmarkGet400(b *testing.B)     { benchmarkGet(b, 8, 5, false) }
-func BenchmarkGet25K(b *testing.B)     { benchmarkGet(b, 512, 5, false) }
-func BenchmarkGet50K(b *testing.B)     { benchmarkGet(b, 1024, 5, false) }
-func BenchmarkGet204K(b *testing.B)    { benchmarkGet(b, 4096, 10, false) }
-func BenchmarkGet10M(b *testing.B)     { benchmarkGet(b, 200000, 5, false) }
-func BenchmarkAdd25k(b *testing.B)     { benchmarkAdd(b, 100, 100, false) }
-func BenchmarkAddBulk25k(b *testing.B) { benchmarkBulkAdd(b, 100, 5, false) }
-func BenchmarkRemove6k(b *testing.B)   { benchmarkRemove(b, 128, 5, false) }
-
-func BenchmarkStringGet400(b *testing.B) { benchmarkGetString(b, 8) }
-func BenchmarkStringGet25k(b *testing.B) { benchmarkGetString(b, 512) }
-
-func benchmarkGetString(b *testing.B, shards int) {
-
-	hash := New(WithDefaultReplicas(50))
-
-	var buckets []string
-	var lookups []string
-	for i := 0; i < shards; i++ {
-		buckets = append(buckets, fmt.Sprintf("shard-%d", i))
-		hash.Add([]byte(fmt.Sprintf("shard-%d", i)))
-		lookups = append(lookups, fmt.Sprintf("shard-x-%d", i))
-	}
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		hash.GetString(lookups[i&(shards-1)])
-	}
-}
-
-func benchmarkBulkAdd(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
-	hash := New(makeOptions(50, blockPartitionDivision, showMetrics)...)
-	var buckets [][]byte
-	for i := 0; i <= shards; i++ {
-		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		hash.Add(buckets...)
-	}
-}
-
-func benchmarkAdd(b *testing.B, shards, blockPartitionDivision int, showMetrics bool) {
-	hash := New(makeOptions(50*uint(shards), blockPartitionDivision, showMetrics)...)
-	var buckets [][]byte
-	for i := 0; i < b.N; i++ {
-		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		hash.Add(buckets[i])
-	}
-}
-
-func benchmarkConcurrent(b *testing.B, shards, blockPartitionDivision int, showMetrics bool) {
-	hash := New(makeOptions(50, blockPartitionDivision, showMetrics)...)
-	var lookups [][]byte
-	var buckets [][]byte
-	for i := 0; i <= shards; i++ {
-		var str bytes.Buffer
-		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
-		str.WriteString(fmt.Sprintf("shard-x-%d", i))
-		lookups = append(lookups, str.Bytes())
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(3)
-	b.ResetTimer()
-	go func() {
-		for i := 0; i < b.N; i++ {
-			hash.Add(buckets[rand.Intn(shards-1)])
-		}
-		wg.Done()
-	}()
-	go func() {
-		for i := 0; i < b.N; i++ {
-			hash.Remove(buckets[rand.Intn(shards-1)])
-		}
-		wg.Done()
-	}()
-	go func() {
-		for i := 0; i < b.N; i++ {
-			hash.Get(lookups[rand.Intn(shards-1)])
-		}
-		wg.Done()
-	}()
-	wg.Wait()
-}
-
-func benchmarkRemove(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
-	hash := New(makeOptions(50, blockPartitionDivision, showMetrics)...)
-	var buckets [][]byte
-	for i := 0; i <= shards; i++ {
-		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
-	}
-	hash.Add(buckets...)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		hash.Remove(buckets[i%(shards-1)])
-	}
-}
-
-func benchmarkGet(b *testing.B, shards int, blockPartitionDivision int, showMetrics bool) {
-	hash := New(makeOptions(50, blockPartitionDivision, showMetrics)...)
-	var lookups [][]byte
-	var buckets [][]byte
-	for i := 0; i <= shards; i++ {
-		var str bytes.Buffer
-		buckets = append(buckets, []byte(fmt.Sprintf("%d", i)))
-		str.WriteString(fmt.Sprintf("shard-x-%d", i))
-		lookups = append(lookups, str.Bytes())
-	}
-	hash.Add(buckets...)
-
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			hash.Get(lookups[rand.Intn(shards-1)])
-		}
-	})
-}
-
-func makeOptions(replica uint, partitioning int, metrics bool) []Option {
-	opts := []Option{
-		WithDefaultReplicas(replica),
-		WithBlockPartitioning(partitioning),
-	}
-	return opts
+func TestHashing_TestReplication_TestConcurrency_TestConsistency(t *testing.T) {
+	t.Run("TestHashing", TestHashing)
+	t.Run("TestReplication", TestReplication)
+	t.Run("TestConcurrency", TestConcurrency)
+	t.Run("TestConsistency", TestConsistency)
 }

@@ -40,8 +40,8 @@ func New(opts ...Option) *ConsistentHash {
 	ch := &ConsistentHash{
 		replicas:   o.defaultReplicas,
 		hash:       o.hashFunc,
-		hashMap:    make(map[uint32][]byte, 0),
-		replicaMap: make(map[uint32]uint, 0),
+		hashMap:    make([]node, 0),
+		replicaMap: make(map[uint32]uint),
 	}
 
 	if ch.replicas < 1 {
@@ -57,7 +57,7 @@ func New(opts ...Option) *ConsistentHash {
 	}
 
 	ch.blockPartitioning = uint32(o.blockPartitioning)
-	ch.blockMap = make(map[uint32][]node, ch.blockPartitioning)
+	ch.blockMap = make([]node, 0)
 	ch.pool = sync.Pool{New: func() any { return make(map[uint32][]node, o.blockPartitioning) }}
 	ch.totalBlocks = 1
 

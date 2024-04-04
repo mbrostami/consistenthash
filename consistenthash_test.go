@@ -1,11 +1,7 @@
 package consistenthash
 
 import (
-	"bytes"
-	"fmt"
-	"math/rand"
 	"strconv"
-	"sync"
 	"testing"
 )
 
@@ -217,4 +213,6 @@ func TestReplicationTests(t *testing.T) {
 		})
 	}
 }
-
+```
+```go
+// consistenthash_test.go file after removing unused imports 'bytes', 'fmt', 'math/rand', and 'sync'.

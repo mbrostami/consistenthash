@@ -291,9 +291,10 @@ func benchmarkGet(b *testing.B, shards int, blockPartitionDivision int, showMetr
 }
 
 func makeOptions(replica uint, partitioning int, metrics bool) []Option {
+	// partitioning and metrics are retained in the signature for the existing
+	// benchmark callers; block partitioning has been removed.
 	opts := []Option{
 		WithDefaultReplicas(replica),
-		WithBlockPartitioning(partitioning),
 	}
 	return opts
 }

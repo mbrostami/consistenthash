@@ -13,6 +13,12 @@ This package is based on [golang/groupcache](https://github.com/golang/groupcach
 - Concurrency-safe: all operations are guarded by a single `sync.RWMutex`
 - Stored keys are copied, so mutating the caller's buffer afterwards can't corrupt the ring
 
+> Note: the `WithBlockPartitioning` option was removed. The earlier block-based
+> lookup returned the wrong node once the ring spanned more than one block and
+> was not concurrency-safe; lookups now use a sorted ring with binary search
+> (`O(log N)`), which also benchmarked faster. No code change is needed unless
+> you were passing `WithBlockPartitioning` (simply drop it).
+
 # Technical Details
 
 The ring is a single slice of positions kept sorted by hash value, plus two maps:
